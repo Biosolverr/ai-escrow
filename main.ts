@@ -1,6 +1,7 @@
-// deno.json: { "unstable": ["kv"] }
-// ── AI Escrow Backend — main.ts ────────────────────────────────────────────
-// Deploy on Deno Deploy. Serves frontend + REST API with Deno KV persistence.
+// 🚀 AI Escrow — Single File Deployment for Deno Deploy
+// ℹ️ В панели Deno Deploy включите: Settings → Unstable APIs → ✅ Deno KV
+// ℹ️ Локально запускайте: deno run --unstable-kv --allow-env --allow-net main.ts
+// ℹ️ Переменные окружения: GROQ_API_KEY, LLM_PROVIDER (опционально)
 
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
 const LLM_MODEL = Deno.env.get("LLM_PROVIDER") ?? "llama-3.1-8b-instant";
@@ -24,23 +25,19 @@ async function getEscrow(id: number): Promise<Escrow | null> {
   const res = await kv.get<Escrow>(["escrow", id]);
   return res.value;
 }
-
 async function setEscrow(escrow: Escrow): Promise<void> {
   await kv.set(["escrow", escrow.id], escrow);
 }
-
 async function nextId(): Promise<number> {
   const res = await kv.get<number>(["counter"]);
   const id = res.value ?? 0;
   await kv.set(["counter"], id + 1);
   return id;
 }
-
 async function countEscrows(): Promise<number> {
   const res = await kv.get<number>(["counter"]);
   return res.value ?? 0;
 }
-
 async function getAllEscrows(): Promise<Escrow[]> {
   const list: Escrow[] = [];
   for await (const entry of kv.list<Escrow>({ prefix: ["escrow"] })) {
@@ -56,7 +53,6 @@ function cors(headers: HeadersInit = {}): Headers {
   h.set("Access-Control-Allow-Headers", "Content-Type");
   return h;
 }
-
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -80,7 +76,7 @@ ${deliverableUrl}
 Evaluate whether the freelancer completed the task as specified.
 Respond with EXACTLY one word — your verdict:
 - "approved" — task fully completed
-- "partial" — task partially completed  
+- "partial" — task partially completed
 - "rejected" — task not completed or does not meet requirements
 
 Your verdict (one word only):`;
@@ -231,13 +227,11 @@ function frontendHTML(): string {
 </style>
 </head>
 <body>
-<div class="orb orb-1"></div>
-<div class="orb orb-2"></div>
+<div class="orb orb-1"></div><div class="orb orb-2"></div>
 <header>
   <div class="logo"><div class="logo-icon">⚖</div>AI ESCROW</div>
   <div style="display:flex;gap:8px;align-items:center">
-    <span class="badge">GENLAYER</span>
-    <span class="badge" id="networkBadge">CONNECTING...</span>
+    <span class="badge">GENLAYER</span><span class="badge" id="networkBadge">CONNECTING...</span>
   </div>
 </header>
 <div class="wrap">
@@ -247,15 +241,15 @@ function frontendHTML(): string {
     <p class="hero-sub">Escrow funds released by AI consensus — not humans.<br>Three independent agents evaluate deliverables. Majority rules.</p>
   </div>
   <div class="flow">
-    <div class="flow-step"><div class="flow-node">💼</div><div class="flow-label">CREATE ESCROW</div></div>
+    <div class="flow-step"><div class="flow-node">💼</div><div class="flow-label">CREATE</div></div>
     <div class="flow-arrow"></div>
-    <div class="flow-step"><div class="flow-node">🛠</div><div class="flow-label">SUBMIT WORK</div></div>
+    <div class="flow-step"><div class="flow-node">🛠</div><div class="flow-label">SUBMIT</div></div>
     <div class="flow-arrow"></div>
-    <div class="flow-step"><div class="flow-node">🤖</div><div class="flow-label">AI ARBITRATION</div></div>
+    <div class="flow-step"><div class="flow-node">🤖</div><div class="flow-label">ARBITRATE</div></div>
     <div class="flow-arrow"></div>
-    <div class="flow-step"><div class="flow-node">⚡</div><div class="flow-label">CONSENSUS VOTE</div></div>
+    <div class="flow-step"><div class="flow-node">⚡</div><div class="flow-label">CONSENSUS</div></div>
     <div class="flow-arrow"></div>
-    <div class="flow-step"><div class="flow-node">💰</div><div class="flow-label">FUNDS RELEASED</div></div>
+    <div class="flow-step"><div class="flow-node">💰</div><div class="flow-label">RELEASE</div></div>
   </div>
   <div class="stats">
     <div class="stat-card"><div class="stat-val" id="statEscrows">0</div><div class="stat-key">Total Escrows</div></div>
@@ -263,12 +257,11 @@ function frontendHTML(): string {
     <div class="stat-card"><div class="stat-val">1%</div><div class="stat-key">Platform Fee</div></div>
   </div>
   <div class="tabs">
-    <button class="tab active" onclick="switchTab('create',this)">💼 Create Escrow</button>
-    <button class="tab" onclick="switchTab('submit',this)">🛠 Submit Work</button>
+    <button class="tab active" onclick="switchTab('create',this)">💼 Create</button>
+    <button class="tab" onclick="switchTab('submit',this)">🛠 Submit</button>
     <button class="tab" onclick="switchTab('arbitrate',this)">⚖ Arbitrate</button>
-    <button class="tab" onclick="switchTab('status',this)">📊 Check Status</button>
+    <button class="tab" onclick="switchTab('status',this)">📊 Status</button>
   </div>
-
   <div id="tab-create" class="tab-panel active">
     <div class="section-title">New Escrow</div>
     <div class="card">
@@ -286,7 +279,6 @@ function frontendHTML(): string {
     </div>
     <div class="terminal" id="createLog" style="display:none"></div>
   </div>
-
   <div id="tab-submit" class="tab-panel">
     <div class="section-title">Submit Deliverable</div>
     <div class="card">
@@ -296,7 +288,6 @@ function frontendHTML(): string {
     </div>
     <div class="terminal" id="submitLog" style="display:none"></div>
   </div>
-
   <div id="tab-arbitrate" class="tab-panel">
     <div class="section-title">AI Arbitration</div>
     <div class="card">
@@ -316,7 +307,6 @@ function frontendHTML(): string {
     </div>
     <div class="terminal" id="arbitrateLog" style="display:none"></div>
   </div>
-
   <div id="tab-status" class="tab-panel">
     <div class="section-title">Escrow Status</div>
     <div class="card">
@@ -337,7 +327,6 @@ function frontendHTML(): string {
     </div>
   </div>
 </div>
-
 <script>
   function switchTab(name, btn) {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -345,7 +334,6 @@ function frontendHTML(): string {
     document.getElementById('tab-' + name).classList.add('active');
     btn.classList.add('active');
   }
-
   function log(id, msg, type='info') {
     const el = document.getElementById(id);
     el.style.display = 'block';
@@ -356,14 +344,13 @@ function frontendHTML(): string {
     el.appendChild(d);
     el.scrollTop = el.scrollHeight;
   }
-
   async function createEscrow() {
     const freelancer = document.getElementById('freelancerAddr').value.trim();
     const amount = document.getElementById('escrowAmount').value;
     const taskSpec = document.getElementById('taskSpec').value.trim();
     if (!freelancer || !amount || !taskSpec) { log('createLog','ERROR: all fields required','err'); return; }
     if (taskSpec.length < 20) { log('createLog','ERROR: task spec too short (min 20 chars)','err'); return; }
-    log('createLog','Sending create_escrow transaction...','info');
+    log('createLog','Creating escrow...','info');
     try {
       const res = await fetch('/api/escrow/create', {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -378,9 +365,7 @@ function frontendHTML(): string {
       } else { log('createLog','ERROR: '+data.error,'err'); }
     } catch(e) { log('createLog','ERROR: '+e.message,'err'); }
   }
-
   function copyId() { navigator.clipboard.writeText(document.getElementById('newEscrowIdVal').textContent); }
-
   async function submitWork() {
     const id = document.getElementById('submitEscrowId').value;
     const url = document.getElementById('deliverableUrl').value.trim();
@@ -399,7 +384,6 @@ function frontendHTML(): string {
       } else { log('submitLog','ERROR: '+data.error,'err'); }
     } catch(e) { log('submitLog','ERROR: '+e.message,'err'); }
   }
-
   async function triggerArbitration() {
     const id = document.getElementById('arbitrateId').value.trim();
     if (!id) { log('arbitrateLog','ERROR: Escrow ID required','err'); return; }
@@ -412,9 +396,7 @@ function frontendHTML(): string {
     ['a1verdict','a2verdict','a3verdict'].forEach(a => { document.getElementById(a).textContent='...'; document.getElementById(a).style.color='var(--accent)'; });
     log('arbitrateLog','Starting AI arbitration for escrow #'+id+'...','info');
     try {
-      const res = await fetch('/api/escrow/'+id+'/arbitrate', {
-        method:'POST', headers:{'Content-Type':'application/json'}
-      });
+      const res = await fetch('/api/escrow/'+id+'/arbitrate', { method:'POST', headers:{'Content-Type':'application/json'} });
       const data = await res.json();
       if (data.success) {
         const votes = data.votes || [];
@@ -439,7 +421,6 @@ function frontendHTML(): string {
     btn.disabled=false;
     btn.innerHTML='<span>Trigger AI Arbitration</span> →';
   }
-
   async function checkStatus() {
     const id = document.getElementById('statusId').value;
     if (id === '') return;
@@ -458,7 +439,6 @@ function frontendHTML(): string {
       } else { alert('Escrow not found'); }
     } catch(e) { alert('Error: '+e.message); }
   }
-
   (async()=>{
     try {
       const r = await fetch('/health');
@@ -489,13 +469,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (method === "GET" && path === "/api/escrows") {
     return json({ success: true, escrows: await getAllEscrows() });
   }
-
   const getMatch = path.match(/^\/api\/escrow\/(\d+)$/);
   if (method === "GET" && getMatch) {
     const escrow = await getEscrow(parseInt(getMatch[1]));
     return escrow ? json({ success: true, ...escrow }) : json({ success: false, error: "Escrow not found" }, 404);
   }
-
   if (method === "POST" && path === "/api/escrow/create") {
     try {
       const { freelancer, amount_eth, task_description, client } = await req.json();
@@ -516,7 +494,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json({ success: false, error: "Invalid JSON" }, 400);
     }
   }
-
   const submitMatch = path.match(/^\/api\/escrow\/(\d+)\/submit$/);
   if (method === "POST" && submitMatch) {
     const id = parseInt(submitMatch[1]);
@@ -533,14 +510,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json({ success: false, error: "Invalid JSON" }, 400);
     }
   }
-
   const arbMatch = path.match(/^\/api\/escrow\/(\d+)\/arbitrate$/);
   if (method === "POST" && arbMatch) {
     const id = parseInt(arbMatch[1]);
     const escrow = await getEscrow(id);
     if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
     if (escrow.status !== "submitted") return json({ success: false, error: "Escrow must be in 'submitted' status" }, 400);
-    
     const start = Date.now();
     const [v1, v2, v3] = await Promise.all([
       callAgent("Technical Completeness", escrow.task_description, escrow.deliverable_url),
@@ -549,14 +524,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     ]);
     const votes = [v1, v2, v3];
     const final_verdict = majority(votes);
-    
     escrow.votes = votes;
     escrow.final_verdict = final_verdict;
     escrow.status = final_verdict as Escrow["status"];
     await setEscrow(escrow);
-    
     return json({ success: true, escrow_id: id, votes, final_verdict, processing_time_ms: Date.now() - start });
   }
-
   return json({ error: "Not Found", path }, 404);
 });
