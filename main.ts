@@ -2,9 +2,8 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const PORT = Deno.env.get("PORT") || 8000;
-const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
 
-console.log(`🚀 AI Escrow Backend (Real Groq Agents) запущен`);
+console.log(`🚀 AI Escrow Backend (Real Groq Agents) запущен на порту ${PORT}`);
 
 serve(async (req: Request) => {
   const url = new URL(req.url);
