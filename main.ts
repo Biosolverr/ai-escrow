@@ -1,7 +1,6 @@
-// 🚀 AI Escrow — Single File Deployment for Deno Deploy
-// ℹ️ В панели Deno Deploy включите: Settings → Unstable APIs → ✅ Deno KV
-// ℹ️ Локально запускайте: deno run --unstable-kv --allow-env --allow-net main.ts
-// ℹ️ Переменные окружения: GROQ_API_KEY, LLM_PROVIDER (опционально)
+// ── AI Escrow — Production Ready (Single File) ──────────────────────────
+// ℹ️ Требуется: deno.json в корне + GROQ_API_KEY в Environment Variables
+// ℹ️ Локально: deno run --unstable-kv --allow-env --allow-net main.ts
 
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
 const LLM_MODEL = Deno.env.get("LLM_PROVIDER") ?? "llama-3.1-8b-instant";
@@ -20,24 +19,43 @@ interface Escrow {
 }
 
 const kv = await Deno.openKv();
+console.info("✅ Deno KV initialized");
 
+// ── Audit Logger (KV + Console) ─────────────────────────────────────────
+async function logAudit(action: string, details: Record<string, unknown>) {
+  const entry = { action, details, timestamp: new Date().toISOString() };
+  await kv.set(["log", Date.now()], entry);
+  console.info(`📜 AUDIT: ${action}`, JSON.stringify(details));
+}
+
+// ── KV Helpers ───────────────────────────────────────────────────────────
 async function getEscrow(id: number): Promise<Escrow | null> {
   const res = await kv.get<Escrow>(["escrow", id]);
-  return res.value;
+  return res.value ?? null;
 }
+
 async function setEscrow(escrow: Escrow): Promise<void> {
   await kv.set(["escrow", escrow.id], escrow);
+  await logAudit("escrow_updated", { id: escrow.id, status: escrow.status });
 }
+
 async function nextId(): Promise<number> {
-  const res = await kv.get<number>(["counter"]);
-  const id = res.value ?? 0;
-  await kv.set(["counter"], id + 1);
-  return id;
+  while (true) {
+    const res = await kv.get<number>(["counter"]);
+    const id = res.value ?? 0;
+    const commit = await kv.atomic().check(res).set(["counter"], id + 1).commit();
+    if (commit.ok) {
+      await logAudit("next_id_generated", { id });
+      return id;
+    }
+  }
 }
+
 async function countEscrows(): Promise<number> {
   const res = await kv.get<number>(["counter"]);
   return res.value ?? 0;
 }
+
 async function getAllEscrows(): Promise<Escrow[]> {
   const list: Escrow[] = [];
   for await (const entry of kv.list<Escrow>({ prefix: ["escrow"] })) {
@@ -46,6 +64,7 @@ async function getAllEscrows(): Promise<Escrow[]> {
   return list;
 }
 
+// ── HTTP Utils ───────────────────────────────────────────────────────────
 function cors(headers: HeadersInit = {}): Headers {
   const h = new Headers(headers);
   h.set("Access-Control-Allow-Origin", "*");
@@ -53,6 +72,7 @@ function cors(headers: HeadersInit = {}): Headers {
   h.set("Access-Control-Allow-Headers", "Content-Type");
   return h;
 }
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -60,46 +80,26 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-async function callAgent(
-  agentRole: string,
-  taskDescription: string,
-  deliverableUrl: string
-): Promise<"approved" | "partial" | "rejected"> {
-  const prompt = `You are an AI escrow arbitration agent. Your role: ${agentRole}.
-
-Task that was agreed upon:
-${taskDescription}
-
-Deliverable URL submitted by freelancer:
-${deliverableUrl}
-
-Evaluate whether the freelancer completed the task as specified.
-Respond with EXACTLY one word — your verdict:
-- "approved" — task fully completed
-- "partial" — task partially completed
-- "rejected" — task not completed or does not meet requirements
-
-Your verdict (one word only):`;
+// ── AI Agent ─────────────────────────────────────────────────────────────
+async function callAgent(role: string, task: string, url: string): Promise<"approved" | "partial" | "rejected"> {
+  const prompt = `You are an AI escrow arbitration agent. Role: ${role}.
+Task: ${task}
+Deliverable URL: ${url}
+Respond with EXACTLY one word: "approved", "partial", or "rejected".`;
 
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: LLM_MODEL,
-        max_tokens: 10,
-        messages: [{ role: "user", content: prompt }],
-      }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_API_KEY}` },
+      body: JSON.stringify({ model: LLM_MODEL, max_tokens: 10, messages: [{ role: "user", content: prompt }] }),
     });
     const data = await res.json();
     const text = data?.choices?.[0]?.message?.content?.trim().toLowerCase() ?? "";
     if (text.includes("approved")) return "approved";
     if (text.includes("rejected")) return "rejected";
     return "partial";
-  } catch {
+  } catch (e) {
+    console.warn("⚠️ AI Agent failed:", e);
     return "partial";
   }
 }
@@ -114,6 +114,7 @@ function majority(votes: string[]): string {
   return "partial";
 }
 
+// ── Frontend HTML ────────────────────────────────────────────────────────
 function frontendHTML(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -452,7 +453,7 @@ function frontendHTML(): string {
 </html>`;
 }
 
-// ── Router ────────────────────────────────────────────────────────────────
+// ── Router ───────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request): Promise<Response> => {
   const url = new URL(req.url);
   const path = url.pathname;
@@ -463,72 +464,89 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return new Response(frontendHTML(), { headers: cors({ "Content-Type": "text/html; charset=utf-8" }) });
   }
   if (method === "GET" && path === "/health") {
-    const total = await countEscrows();
-    return json({ status: "ok", version: "4.0", network: "DENO-DEPLOY", total_escrows: total });
+    return json({ status: "ok", version: "4.2", network: "DENO-DEPLOY", total_escrows: await countEscrows() });
   }
   if (method === "GET" && path === "/api/escrows") {
     return json({ success: true, escrows: await getAllEscrows() });
   }
+  if (method === "GET" && path === "/debug/kv") {
+    const logs: unknown[] = [];
+    for await (const entry of kv.list({ prefix: ["log"] }, { reverse: true, limit: 50 })) {
+      logs.push(entry.value);
+    }
+    return json({ counter: (await kv.get<number>(["counter"])).value, logs });
+  }
+
   const getMatch = path.match(/^\/api\/escrow\/(\d+)$/);
   if (method === "GET" && getMatch) {
-    const escrow = await getEscrow(parseInt(getMatch[1]));
+    const id = Number(getMatch[1]);
+    const escrow = await getEscrow(id);
     return escrow ? json({ success: true, ...escrow }) : json({ success: false, error: "Escrow not found" }, 404);
   }
+
   if (method === "POST" && path === "/api/escrow/create") {
     try {
       const { freelancer, amount_eth, task_description, client } = await req.json();
-      if (!freelancer || !amount_eth || !task_description) {
-        return json({ success: false, error: "Missing required fields" }, 400);
-      }
+      if (!freelancer || !amount_eth || !task_description) throw new Error("Missing fields");
       const id = await nextId();
       const escrow: Escrow = {
         id, client: client || "anonymous", freelancer,
         amount_eth: String(amount_eth), task_description,
-        deliverable_url: "", status: "pending",
-        votes: [], final_verdict: "",
+        deliverable_url: "", status: "pending", votes: [], final_verdict: "",
         created_at: new Date().toISOString(),
       };
       await setEscrow(escrow);
-      return json({ success: true, escrow_id: id, total: await countEscrows(), record: escrow });
-    } catch {
-      return json({ success: false, error: "Invalid JSON" }, 400);
+      return json({ success: true, escrow_id: id, total: await countEscrows() });
+    } catch (e) {
+      return json({ success: false, error: e.message }, 400);
     }
   }
+
   const submitMatch = path.match(/^\/api\/escrow\/(\d+)\/submit$/);
   if (method === "POST" && submitMatch) {
-    const id = parseInt(submitMatch[1]);
-    const escrow = await getEscrow(id);
-    if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
     try {
+      const id = Number(submitMatch[1]);
+      const escrow = await getEscrow(id);
+      if (!escrow) throw new Error("Escrow not found");
       const { deliverable_url } = await req.json();
-      if (!deliverable_url) return json({ success: false, error: "deliverable_url required" }, 400);
+      if (!deliverable_url) throw new Error("deliverable_url required");
       escrow.deliverable_url = deliverable_url;
       escrow.status = "submitted";
       await setEscrow(escrow);
       return json({ success: true, escrow_id: id, status: "submitted" });
-    } catch {
-      return json({ success: false, error: "Invalid JSON" }, 400);
+    } catch (e) {
+      return json({ success: false, error: e.message }, 400);
     }
   }
+
   const arbMatch = path.match(/^\/api\/escrow\/(\d+)\/arbitrate$/);
   if (method === "POST" && arbMatch) {
-    const id = parseInt(arbMatch[1]);
-    const escrow = await getEscrow(id);
-    if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
-    if (escrow.status !== "submitted") return json({ success: false, error: "Escrow must be in 'submitted' status" }, 400);
-    const start = Date.now();
-    const [v1, v2, v3] = await Promise.all([
-      callAgent("Technical Completeness", escrow.task_description, escrow.deliverable_url),
-      callAgent("Requirement Coverage", escrow.task_description, escrow.deliverable_url),
-      callAgent("Quality & Professionalism", escrow.task_description, escrow.deliverable_url),
-    ]);
-    const votes = [v1, v2, v3];
-    const final_verdict = majority(votes);
-    escrow.votes = votes;
-    escrow.final_verdict = final_verdict;
-    escrow.status = final_verdict as Escrow["status"];
-    await setEscrow(escrow);
-    return json({ success: true, escrow_id: id, votes, final_verdict, processing_time_ms: Date.now() - start });
+    try {
+      const id = Number(arbMatch[1]);
+      const escrow = await getEscrow(id);
+      if (!escrow) throw new Error("Escrow not found");
+      if (escrow.status !== "submitted") throw new Error("Must be 'submitted' first");
+      
+      const start = Date.now();
+      console.info(`🤖 Starting arbitration for escrow #${id}`);
+      const [v1, v2, v3] = await Promise.all([
+        callAgent("Technical Completeness", escrow.task_description, escrow.deliverable_url),
+        callAgent("Requirement Coverage", escrow.task_description, escrow.deliverable_url),
+        callAgent("Quality & Professionalism", escrow.task_description, escrow.deliverable_url),
+      ]);
+      const votes = [v1, v2, v3];
+      const final_verdict = majority(votes);
+      console.info(`🏁 Verdict: ${final_verdict} [${votes.join(', ')}]`);
+      
+      escrow.votes = votes;
+      escrow.final_verdict = final_verdict;
+      escrow.status = final_verdict as Escrow["status"];
+      await setEscrow(escrow);
+      return json({ success: true, votes, final_verdict, processing_time_ms: Date.now() - start });
+    } catch (e) {
+      return json({ success: false, error: e.message }, 400);
+    }
   }
+
   return json({ error: "Not Found", path }, 404);
 });
