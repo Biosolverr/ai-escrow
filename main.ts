@@ -51,7 +51,8 @@ async function addLog(action: string, data: Record<string, unknown>) {
   const key = ["audit_log"];
   const res = await kv.get<string[]>(key);
   let logs = res.value ?? [];
-  logs.push(JSON.stringify({ t: Date.now(), action, ...data }));
+  const entry = Object.assign({ t: Date.now(), action }, data);
+  logs.push(JSON.stringify(entry));
   if (logs.length > 500) logs = logs.slice(-500);
   await kv.set(key, logs);
 }
@@ -481,6 +482,7 @@ async function createEscrow(){
     if(d.success){
       setResult('c-result','✅ Escrow #'+d.escrow_id+' created '+badge('pending'));
       showToast('Escrow #'+d.escrow_id+' created');
+      $('filter-status').value = 'all';
       loadList(); loadStats(); loadLogs();
     }else{
       setResult('c-result','❌ '+(d.error||'Failed'),true);
@@ -504,6 +506,7 @@ async function submitWork(){
     if(d.success){
       setResult('s-result','✅ Work submitted to #'+id+' '+badge('submitted'));
       showToast('Work submitted to #'+id);
+      $('filter-status').value = 'all';
       loadList(); loadStats(); loadLogs();
     }else{
       setResult('s-result','❌ '+(d.error||'Failed'),true);
@@ -530,6 +533,7 @@ async function triggerArbitration(){
       const votesHtml=(d.votes||[]).map(v=>votePill(v)).join('');
       setResult('a-result','✅ Consensus reached: '+badge(d.final_verdict)+'<br/><div class="votes-row" style="margin-top:8px">'+votesHtml+'</div>');
       showToast('Arbitration complete: '+d.final_verdict);
+      $('filter-status').value = 'all';
       loadList(); loadStats(); loadLogs();
       // Auto-inspect after arbitration
       setTimeout(()=>inspectEscrow(id), 300);
