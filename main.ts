@@ -1,47 +1,65 @@
 // main.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-const PORT = Deno.env.get("PORT") || 8000;
+const PORT = parseInt(Deno.env.get("PORT") || "8000");
 
 console.log(`🚀 AI Escrow Backend (Real Groq Agents) запущен на порту ${PORT}`);
 
 serve(async (req: Request) => {
   const url = new URL(req.url);
   const path = url.pathname;
+
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
 
-  if (req.method === "OPTIONS") return new Response(null, { headers });
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers });
+  }
 
+  // ====================== HEALTH ======================
   if (path === "/" || path === "/health") {
-    return Response.json({ 
-      status: "ok", 
+    return Response.json({
+      status: "ok",
       message: "AI Escrow Backend — Real 3 LLM Agents",
+      port: PORT
     }, { headers });
   }
 
-  // Create Escrow
+  // ====================== CREATE ESCROW ======================
   if (path === "/api/create-escrow" && req.method === "POST") {
     const { freelancer, task_description } = await req.json();
     const escrow_id = Math.floor(Math.random() * 100000);
-    return Response.json({ success: true, escrow_id }, { headers });
+
+    return Response.json({
+      success: true,
+      escrow_id,
+      message: "Escrow created successfully"
+    }, { headers });
   }
 
-  // Submit Work
+  // ====================== SUBMIT WORK ======================
   if (path === "/api/submit-work" && req.method === "POST") {
     const { escrow_id, deliverable_url } = await req.json();
-    return Response.json({ success: true, escrow_id, deliverable_url }, { headers });
+
+    return Response.json({
+      success: true,
+      escrow_id,
+      deliverable_url
+    }, { headers });
   }
 
-  // Trigger Arbitration — 3 реальных агента
+  // ====================== TRIGGER ARBITRATION ======================
   if (path === "/api/trigger-arbitration" && req.method === "POST") {
     const { escrow_id, task_description, deliverable_url } = await req.json();
 
     if (!task_description || !deliverable_url) {
-      return Response.json({ success: false, error: "task_description и deliverable_url обязательны" }, { status: 400, headers });
+      return Response.json({ 
+        success: false, 
+        error: "task_description and deliverable_url are required" 
+      }, { status: 400, headers });
     }
 
     const votes = await runThreeRealAgents(task_description, deliverable_url);
@@ -59,8 +77,11 @@ serve(async (req: Request) => {
   return new Response("Not Found", { status: 404, headers });
 });
 
-// ==================== REAL GROQ CALL ====================
+// ==================== GROQ HELPERS ====================
 async function callGroq(prompt: string): Promise<string> {
+  const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
+  if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY is not set");
+
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -76,14 +97,15 @@ async function callGroq(prompt: string): Promise<string> {
   });
 
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || "Groq error");
+  if (!res.ok) throw new Error(data.error?.message || "Groq API error");
+  
   return data.choices[0].message.content.trim();
 }
 
-// ==================== 3 АГЕНТА ИЗ КОНТРАКТА ====================
-async function runThreeRealAgents(task: string, url: string) {
-  const agents = [
-    // Agent 1 — Technical Completeness
+// ==================== 3 AGENTS ====================
+async function runThreeRealAgents(task: string, url: string): Promise<string[]> {
+  const agentPrompts = [
+    // Agent 1: Technical Completeness
     `You are a strict technical evaluator for a freelance escrow system.
 
 TASK SPECIFICATION:
@@ -91,13 +113,9 @@ ${task}
 
 DELIVERABLE URL: ${url}
 
-Evaluate whether the deliverable is TECHNICALLY COMPLETE.
-Respond with EXACTLY one of these words and nothing else:
-APPROVED
-PARTIAL
-REJECTED`,
+Respond with EXACTLY one word: APPROVED, PARTIAL or REJECTED`,
 
-    // Agent 2 — Requirement Coverage
+    // Agent 2: Requirement Coverage
     `You are a meticulous requirements analyst for a freelance escrow system.
 
 TASK SPECIFICATION:
@@ -105,13 +123,9 @@ ${task}
 
 DELIVERABLE URL: ${url}
 
-Extract explicit requirements and check coverage.
-Respond with EXACTLY one of these words and nothing else:
-APPROVED
-PARTIAL
-REJECTED`,
+Respond with EXACTLY one word: APPROVED, PARTIAL or REJECTED`,
 
-    // Agent 3 — Quality & Professionalism
+    // Agent 3: Quality & Professionalism
     `You are a quality assurance expert evaluating freelance work for escrow release.
 
 TASK SPECIFICATION:
@@ -119,25 +133,20 @@ ${task}
 
 DELIVERABLE URL: ${url}
 
-Evaluate overall QUALITY and PROFESSIONALISM.
-Respond with EXACTLY one of these words and nothing else:
-APPROVED
-PARTIAL
-REJECTED`
+Respond with EXACTLY one word: APPROVED, PARTIAL or REJECTED`
   ];
 
   const votes: string[] = [];
-  const names = ["Technical Completeness", "Requirement Coverage", "Quality & Professionalism"];
+  const names = ["Technical", "Requirements", "Quality"];
 
   for (let i = 0; i < 3; i++) {
     try {
-      console.log(`🤖 Agent ${i+1} (${names[i]}) running...`);
-      const result = await callGroq(agents[i]);
+      const result = await callGroq(agentPrompts[i]);
       const vote = parseVerdict(result);
       votes.push(vote);
-      console.log(`   → ${names[i]}: ${vote}`);
+      console.log(`✅ Agent ${names[i]}: ${vote}`);
     } catch (e) {
-      console.error(`Agent ${i+1} failed:`, e);
+      console.error(`Agent ${i+1} failed`, e);
       votes.push("partial");
     }
   }
