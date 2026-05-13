@@ -1,11 +1,10 @@
+// deno.json: { "unstable": ["kv"] }
 // ── AI Escrow Backend — main.ts ────────────────────────────────────────────
-// Deploy on Deno Deploy. Serves frontend + full REST API.
-// Uses Groq API for 3-agent arbitration + Deno KV for persistent storage.
- 
+// Deploy on Deno Deploy. Serves frontend + REST API with Deno KV persistence.
+
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
 const LLM_MODEL = Deno.env.get("LLM_PROVIDER") ?? "llama-3.1-8b-instant";
- 
-// ── Persistent storage via Deno KV ────────────────────────────────────────
+
 interface Escrow {
   id: number;
   client: string;
@@ -18,30 +17,30 @@ interface Escrow {
   final_verdict: string;
   created_at: string;
 }
- 
+
 const kv = await Deno.openKv();
- 
+
 async function getEscrow(id: number): Promise<Escrow | null> {
   const res = await kv.get<Escrow>(["escrow", id]);
   return res.value;
 }
- 
+
 async function setEscrow(escrow: Escrow): Promise<void> {
   await kv.set(["escrow", escrow.id], escrow);
 }
- 
+
 async function nextId(): Promise<number> {
   const res = await kv.get<number>(["counter"]);
-  const id = (res.value ?? 0) + 1; // Start IDs from 1
-  await kv.set(["counter"], id);
+  const id = res.value ?? 0;
+  await kv.set(["counter"], id + 1);
   return id;
 }
- 
+
 async function countEscrows(): Promise<number> {
   const res = await kv.get<number>(["counter"]);
   return res.value ?? 0;
 }
- 
+
 async function getAllEscrows(): Promise<Escrow[]> {
   const list: Escrow[] = [];
   for await (const entry of kv.list<Escrow>({ prefix: ["escrow"] })) {
@@ -49,8 +48,7 @@ async function getAllEscrows(): Promise<Escrow[]> {
   }
   return list;
 }
- 
-// ── CORS ──────────────────────────────────────────────────────────────────
+
 function cors(headers: HeadersInit = {}): Headers {
   const h = new Headers(headers);
   h.set("Access-Control-Allow-Origin", "*");
@@ -58,36 +56,35 @@ function cors(headers: HeadersInit = {}): Headers {
   h.set("Access-Control-Allow-Headers", "Content-Type");
   return h;
 }
- 
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: cors({ "Content-Type": "application/json" }),
   });
 }
- 
-// ── AI Agent via Groq ─────────────────────────────────────────────────────
+
 async function callAgent(
   agentRole: string,
   taskDescription: string,
   deliverableUrl: string
 ): Promise<"approved" | "partial" | "rejected"> {
   const prompt = `You are an AI escrow arbitration agent. Your role: ${agentRole}.
- 
+
 Task that was agreed upon:
 ${taskDescription}
- 
+
 Deliverable URL submitted by freelancer:
 ${deliverableUrl}
- 
+
 Evaluate whether the freelancer completed the task as specified.
 Respond with EXACTLY one word — your verdict:
 - "approved" — task fully completed
-- "partial" — task partially completed
+- "partial" — task partially completed  
 - "rejected" — task not completed or does not meet requirements
- 
+
 Your verdict (one word only):`;
- 
+
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -110,8 +107,7 @@ Your verdict (one word only):`;
     return "partial";
   }
 }
- 
-// ── Majority vote ─────────────────────────────────────────────────────────
+
 function majority(votes: string[]): string {
   const c: Record<string, number> = { approved: 0, partial: 0, rejected: 0 };
   votes.forEach((v) => { if (c[v] !== undefined) c[v]++; });
@@ -121,8 +117,7 @@ function majority(votes: string[]): string {
   }
   return "partial";
 }
- 
-// ── Frontend HTML ─────────────────────────────────────────────────────────
+
 function frontendHTML(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -273,7 +268,7 @@ function frontendHTML(): string {
     <button class="tab" onclick="switchTab('arbitrate',this)">⚖ Arbitrate</button>
     <button class="tab" onclick="switchTab('status',this)">📊 Check Status</button>
   </div>
- 
+
   <div id="tab-create" class="tab-panel active">
     <div class="section-title">New Escrow</div>
     <div class="card">
@@ -291,21 +286,21 @@ function frontendHTML(): string {
     </div>
     <div class="terminal" id="createLog" style="display:none"></div>
   </div>
- 
+
   <div id="tab-submit" class="tab-panel">
     <div class="section-title">Submit Deliverable</div>
     <div class="card">
-      <label>Escrow ID</label><input type="number" id="submitEscrowId" placeholder="1">
+      <label>Escrow ID</label><input type="number" id="submitEscrowId" placeholder="0">
       <label>Deliverable URL</label><input type="text" id="deliverableUrl" placeholder="https://github.com/user/repo">
       <button class="btn btn-primary" onclick="submitWork()"><span>Submit Work</span> →</button>
     </div>
     <div class="terminal" id="submitLog" style="display:none"></div>
   </div>
- 
+
   <div id="tab-arbitrate" class="tab-panel">
     <div class="section-title">AI Arbitration</div>
     <div class="card">
-      <label>Escrow ID</label><input type="number" id="arbitrateId" placeholder="1">
+      <label>Escrow ID</label><input type="number" id="arbitrateId" placeholder="0">
       <div class="agents" id="agentsDisplay" style="display:none">
         <div class="agent-card" id="agent1"><div class="agent-icon">🔍</div><div class="agent-name">TECHNICAL<br>COMPLETENESS</div><div class="agent-verdict" id="a1verdict">—</div></div>
         <div class="agent-card" id="agent2"><div class="agent-icon">📋</div><div class="agent-name">REQUIREMENT<br>COVERAGE</div><div class="agent-verdict" id="a2verdict">—</div></div>
@@ -321,11 +316,11 @@ function frontendHTML(): string {
     </div>
     <div class="terminal" id="arbitrateLog" style="display:none"></div>
   </div>
- 
+
   <div id="tab-status" class="tab-panel">
     <div class="section-title">Escrow Status</div>
     <div class="card">
-      <label>Escrow ID</label><input type="number" id="statusId" placeholder="1">
+      <label>Escrow ID</label><input type="number" id="statusId" placeholder="0">
       <button class="btn btn-outline" onclick="checkStatus()">Check Status</button>
     </div>
     <div id="statusResult" style="display:none" class="card">
@@ -342,7 +337,7 @@ function frontendHTML(): string {
     </div>
   </div>
 </div>
- 
+
 <script>
   function switchTab(name, btn) {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -350,7 +345,7 @@ function frontendHTML(): string {
     document.getElementById('tab-' + name).classList.add('active');
     btn.classList.add('active');
   }
- 
+
   function log(id, msg, type='info') {
     const el = document.getElementById(id);
     el.style.display = 'block';
@@ -361,7 +356,7 @@ function frontendHTML(): string {
     el.appendChild(d);
     el.scrollTop = el.scrollHeight;
   }
- 
+
   async function createEscrow() {
     const freelancer = document.getElementById('freelancerAddr').value.trim();
     const amount = document.getElementById('escrowAmount').value;
@@ -383,9 +378,9 @@ function frontendHTML(): string {
       } else { log('createLog','ERROR: '+data.error,'err'); }
     } catch(e) { log('createLog','ERROR: '+e.message,'err'); }
   }
- 
+
   function copyId() { navigator.clipboard.writeText(document.getElementById('newEscrowIdVal').textContent); }
- 
+
   async function submitWork() {
     const id = document.getElementById('submitEscrowId').value;
     const url = document.getElementById('deliverableUrl').value.trim();
@@ -404,7 +399,7 @@ function frontendHTML(): string {
       } else { log('submitLog','ERROR: '+data.error,'err'); }
     } catch(e) { log('submitLog','ERROR: '+e.message,'err'); }
   }
- 
+
   async function triggerArbitration() {
     const id = document.getElementById('arbitrateId').value.trim();
     if (!id) { log('arbitrateLog','ERROR: Escrow ID required','err'); return; }
@@ -415,12 +410,10 @@ function frontendHTML(): string {
     document.getElementById('verdictBox').className = 'verdict-box';
     ['agent1','agent2','agent3'].forEach(a => { document.getElementById(a).className='agent-card thinking'; });
     ['a1verdict','a2verdict','a3verdict'].forEach(a => { document.getElementById(a).textContent='...'; document.getElementById(a).style.color='var(--accent)'; });
-    log('arbitrateLog','Starting AI arbitration for Escrow #'+id+'...','info');
-    log('arbitrateLog','Sending to 3 independent AI agents...','info');
+    log('arbitrateLog','Starting AI arbitration for escrow #'+id+'...','info');
     try {
       const res = await fetch('/api/escrow/'+id+'/arbitrate', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({})
+        method:'POST', headers:{'Content-Type':'application/json'}
       });
       const data = await res.json();
       if (data.success) {
@@ -446,7 +439,7 @@ function frontendHTML(): string {
     btn.disabled=false;
     btn.innerHTML='<span>Trigger AI Arbitration</span> →';
   }
- 
+
   async function checkStatus() {
     const id = document.getElementById('statusId').value;
     if (id === '') return;
@@ -465,7 +458,7 @@ function frontendHTML(): string {
       } else { alert('Escrow not found'); }
     } catch(e) { alert('Error: '+e.message); }
   }
- 
+
   (async()=>{
     try {
       const r = await fetch('/health');
@@ -478,45 +471,36 @@ function frontendHTML(): string {
 </body>
 </html>`;
 }
- 
+
 // ── Router ────────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request): Promise<Response> => {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
- 
+
   if (method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
- 
   if (method === "GET" && (path === "/" || path === "")) {
-    return new Response(frontendHTML(), {
-      headers: cors({ "Content-Type": "text/html; charset=utf-8" }),
-    });
+    return new Response(frontendHTML(), { headers: cors({ "Content-Type": "text/html; charset=utf-8" }) });
   }
- 
   if (method === "GET" && path === "/health") {
     const total = await countEscrows();
     return json({ status: "ok", version: "4.0", network: "DENO-DEPLOY", total_escrows: total });
   }
- 
   if (method === "GET" && path === "/api/escrows") {
-    const all = await getAllEscrows();
-    return json({ success: true, escrows: all });
+    return json({ success: true, escrows: await getAllEscrows() });
   }
- 
+
   const getMatch = path.match(/^\/api\/escrow\/(\d+)$/);
   if (method === "GET" && getMatch) {
-    const id = parseInt(getMatch[1]);
-    const escrow = await getEscrow(id);
-    if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
-    return json({ success: true, ...escrow });
+    const escrow = await getEscrow(parseInt(getMatch[1]));
+    return escrow ? json({ success: true, ...escrow }) : json({ success: false, error: "Escrow not found" }, 404);
   }
- 
+
   if (method === "POST" && path === "/api/escrow/create") {
     try {
-      const body = await req.json();
-      const { freelancer, amount_eth, task_description, client } = body;
+      const { freelancer, amount_eth, task_description, client } = await req.json();
       if (!freelancer || !amount_eth || !task_description) {
-        return json({ success: false, error: "Missing fields: freelancer, amount_eth, task_description" }, 400);
+        return json({ success: false, error: "Missing required fields" }, 400);
       }
       const id = await nextId();
       const escrow: Escrow = {
@@ -527,22 +511,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
         created_at: new Date().toISOString(),
       };
       await setEscrow(escrow);
-      const total = await countEscrows();
-      return json({ success: true, escrow_id: id, total, record: escrow });
+      return json({ success: true, escrow_id: id, total: await countEscrows(), record: escrow });
     } catch {
       return json({ success: false, error: "Invalid JSON" }, 400);
     }
   }
- 
+
   const submitMatch = path.match(/^\/api\/escrow\/(\d+)\/submit$/);
   if (method === "POST" && submitMatch) {
     const id = parseInt(submitMatch[1]);
     const escrow = await getEscrow(id);
     if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
     try {
-      const body = await req.json();
-      if (!body.deliverable_url) return json({ success: false, error: "deliverable_url required" }, 400);
-      escrow.deliverable_url = body.deliverable_url;
+      const { deliverable_url } = await req.json();
+      if (!deliverable_url) return json({ success: false, error: "deliverable_url required" }, 400);
+      escrow.deliverable_url = deliverable_url;
       escrow.status = "submitted";
       await setEscrow(escrow);
       return json({ success: true, escrow_id: id, status: "submitted" });
@@ -550,14 +533,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json({ success: false, error: "Invalid JSON" }, 400);
     }
   }
- 
-  // Unified and properly saving Arbitration route
+
   const arbMatch = path.match(/^\/api\/escrow\/(\d+)\/arbitrate$/);
   if (method === "POST" && arbMatch) {
     const id = parseInt(arbMatch[1]);
     const escrow = await getEscrow(id);
     if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
-    if (escrow.status !== "submitted") return json({ success: false, error: "Escrow must be submitted first" }, 400);
+    if (escrow.status !== "submitted") return json({ success: false, error: "Escrow must be in 'submitted' status" }, 400);
     
     const start = Date.now();
     const [v1, v2, v3] = await Promise.all([
@@ -571,10 +553,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
     escrow.votes = votes;
     escrow.final_verdict = final_verdict;
     escrow.status = final_verdict as Escrow["status"];
-    await setEscrow(escrow); // Saves the result back to KV
+    await setEscrow(escrow);
     
     return json({ success: true, escrow_id: id, votes, final_verdict, processing_time_ms: Date.now() - start });
   }
- 
+
   return json({ error: "Not Found", path }, 404);
 });
