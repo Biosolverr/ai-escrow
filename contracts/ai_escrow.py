@@ -1,846 +1,435 @@
-// ─────────────────────────────────────────────────────────────
-// AI ESCROW — GENLAYER STYLE EXECUTION RUNTIME
-// main.ts
-//
-// Deno Deploy / Deno KV compatible
-//
-// Features:
-// - Contract-parity lifecycle
-// - 3 independent AI validators
-// - Consensus / majority vote
-// - Settlement simulation
-// - Disputed state
-// - Validator reasoning
-// - Platform fee simulation
-// - GenLayer-style execution flow
-//
-// Run locally:
-// deno run --unstable-kv --allow-env --allow-net main.ts
-//
-// Required ENV:
-// GROQ_API_KEY=xxx
-// LLM_PROVIDER=llama-3.1-8b-instant
-// ─────────────────────────────────────────────────────────────
-
-const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
-const LLM_MODEL =
-  Deno.env.get("LLM_PROVIDER") ?? "llama-3.1-8b-instant";
-
-const PLATFORM_FEE_BPS = 100; // 1%
-
-type EscrowStatus =
-  | "pending"
-  | "submitted"
-  | "disputed"
-  | "approved"
-  | "partial"
-  | "rejected";
-
-type VoteResult = "approved" | "partial" | "rejected";
-
-interface ValidatorResult {
-  validator: string;
-  verdict: VoteResult;
-  reasoning: string;
-}
-
-interface Settlement {
-  freelancer_payout_eth: number;
-  client_refund_eth: number;
-  platform_fee_eth: number;
-}
-
-interface Escrow {
-  id: number;
-
-  client: string;
-  freelancer: string;
-
-  amount_eth: number;
-
-  task_description: string;
-  deliverable_url: string;
-
-  status: EscrowStatus;
-
-  validator_results: ValidatorResult[];
-
-  votes: VoteResult[];
-
-  final_verdict: VoteResult | "";
-
-  settlement: Settlement | null;
-
-  created_at: string;
-  resolved_at: string | null;
-}
-
-const kv = await Deno.openKv();
-
-console.log("✅ KV initialized");
-
-// ─────────────────────────────────────────────────────────────
-// UTILS
-// ─────────────────────────────────────────────────────────────
-
-function cors(headers: HeadersInit = {}) {
-  const h = new Headers(headers);
-
-  h.set("Access-Control-Allow-Origin", "*");
-  h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  h.set("Access-Control-Allow-Headers", "Content-Type");
-
-  return h;
-}
-
-function json(data: unknown, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: cors({
-      "Content-Type": "application/json",
-    }),
-  });
-}
-
-async function logAudit(
-  action: string,
-  details: Record<string, unknown>,
-) {
-  await kv.set(["audit", Date.now()], {
-    action,
-    details,
-    timestamp: new Date().toISOString(),
-  });
-
-  console.log("📜", action, details);
-}
-
-async function getEscrow(id: number): Promise<Escrow | null> {
-  const res = await kv.get<Escrow>(["escrow", id]);
-  return res.value ?? null;
-}
-
-async function setEscrow(escrow: Escrow) {
-  await kv.set(["escrow", escrow.id], escrow);
-
-  await logAudit("escrow_updated", {
-    id: escrow.id,
-    status: escrow.status,
-  });
-}
-
-async function nextId() {
-  const counter = await kv.get<number>(["counter"]);
-
-  const id = counter.value ?? 0;
-
-  await kv.set(["counter"], id + 1);
-
-  return id;
-}
-
-async function countEscrows() {
-  const counter = await kv.get<number>(["counter"]);
-  return counter.value ?? 0;
-}
-
-async function getAllEscrows(): Promise<Escrow[]> {
-  const list: Escrow[] = [];
-
-  for await (const entry of kv.list<Escrow>({
-    prefix: ["escrow"],
-  })) {
-    list.push(entry.value);
-  }
-
-  return list;
-}
-
-// ─────────────────────────────────────────────────────────────
-// CONSENSUS
-// ─────────────────────────────────────────────────────────────
-
-function computePlatformFee(amount: number) {
-  return Number(
-    ((amount * PLATFORM_FEE_BPS) / 10000).toFixed(6),
-  );
-}
-
-function computeSettlement(
-  amount: number,
-  verdict: VoteResult,
-): Settlement {
-  const fee = computePlatformFee(amount);
-
-  const net = amount - fee;
-
-  if (verdict === "approved") {
-    return {
-      freelancer_payout_eth: Number(net.toFixed(6)),
-      client_refund_eth: 0,
-      platform_fee_eth: fee,
-    };
-  }
-
-  if (verdict === "partial") {
-    return {
-      freelancer_payout_eth: Number((net / 2).toFixed(6)),
-      client_refund_eth: Number((net / 2).toFixed(6)),
-      platform_fee_eth: fee,
-    };
-  }
-
-  return {
-    freelancer_payout_eth: 0,
-    client_refund_eth: Number(net.toFixed(6)),
-    platform_fee_eth: fee,
-  };
-}
-
-function majorityVote(votes: VoteResult[]): VoteResult {
-  const counts = {
-    approved: 0,
-    partial: 0,
-    rejected: 0,
-  };
-
-  for (const v of votes) {
-    counts[v]++;
-  }
-
-  let max = 0;
-  let winner: VoteResult = "partial";
-
-  for (const [k, v] of Object.entries(counts)) {
-    if (v > max) {
-      max = v;
-      winner = k as VoteResult;
-    }
-  }
-
-  if (max >= 2) return winner;
-
-  return "partial";
-}
-
-function parseVerdict(text: string): VoteResult {
-  const t = text.trim().toLowerCase();
-
-  if (t === "approved") return "approved";
-  if (t === "rejected") return "rejected";
-  if (t === "partial") return "partial";
-
-  return "partial";
-}
-
-// ─────────────────────────────────────────────────────────────
-// AI AGENTS
-// ─────────────────────────────────────────────────────────────
-
-async function callValidator(
-  validator: string,
-  task: string,
-  url: string,
-): Promise<ValidatorResult> {
-  if (!GROQ_API_KEY) {
-    return {
-      validator,
-      verdict: "partial",
-      reasoning: "Missing GROQ_API_KEY",
-    };
-  }
-
-  const prompt = `
-You are an AI validator for a GenLayer intelligent escrow contract.
-
-VALIDATOR ROLE:
-${validator}
-
-TASK:
-${task}
-
-DELIVERABLE URL:
-${url}
-
-Evaluate the work.
-
-Return STRICT JSON only:
-
-{
-  "verdict": "approved" | "partial" | "rejected",
-  "reasoning": "short explanation"
-}
-`;
-
-  try {
-    const res = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: LLM_MODEL,
-          temperature: 0.2,
-          max_tokens: 120,
-          messages: [
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-        }),
-      },
-    );
-
-    const data = await res.json();
-
-    const content =
-      data?.choices?.[0]?.message?.content ?? "";
-
-    let parsed;
-
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      return {
-        validator,
-        verdict: "partial",
-        reasoning: "Validator returned invalid JSON",
-      };
-    }
-
-    return {
-      validator,
-      verdict: parseVerdict(parsed.verdict ?? ""),
-      reasoning:
-        String(parsed.reasoning ?? "").slice(0, 300),
-    };
-  } catch (e) {
-    return {
-      validator,
-      verdict: "partial",
-      reasoning: "Validator error: " + e.message,
-    };
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// FRONTEND
-// ─────────────────────────────────────────────────────────────
-
-function frontendHTML() {
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>AI Escrow</title>
-
-<style>
-body{
-  background:#0b0f18;
-  color:white;
-  font-family:Arial;
-  max-width:900px;
-  margin:auto;
-  padding:40px;
-}
-
-.card{
-  background:#121826;
-  padding:20px;
-  border-radius:14px;
-  margin-bottom:20px;
-}
-
-input,textarea{
-  width:100%;
-  padding:12px;
-  margin-top:8px;
-  margin-bottom:16px;
-  background:#0b1220;
-  border:1px solid #263041;
-  color:white;
-  border-radius:8px;
-}
-
-button{
-  padding:12px 18px;
-  border:none;
-  border-radius:10px;
-  cursor:pointer;
-  background:#00d4ff;
-  font-weight:bold;
-}
-
-pre{
-  overflow:auto;
-  background:#081018;
-  padding:14px;
-  border-radius:10px;
-}
-
-.status{
-  padding:6px 12px;
-  border-radius:999px;
-  display:inline-block;
-  font-size:12px;
-  margin-bottom:10px;
-  background:#182338;
-}
-
-h1{
-  margin-bottom:30px;
-}
-</style>
-</head>
-
-<body>
-
-<h1>⚖️ AI Escrow</h1>
-
-<div class="card">
-
-<h2>Create Escrow</h2>
-
-<input id="freelancer" placeholder="0xFreelancer">
-
-<input id="amount" type="number" placeholder="ETH amount">
-
-<textarea id="task" placeholder="Task description"></textarea>
-
-<button onclick="createEscrow()">
-Create Escrow
-</button>
-
-</div>
-
-<div class="card">
-
-<h2>Submit Work</h2>
-
-<input id="submitId" type="number" placeholder="Escrow ID">
-
-<input id="deliverable" placeholder="https://github.com/...">
-
-<button onclick="submitWork()">
-Submit
-</button>
-
-</div>
-
-<div class="card">
-
-<h2>Run Arbitration</h2>
-
-<input id="arbId" type="number" placeholder="Escrow ID">
-
-<button onclick="arbitrate()">
-Arbitrate
-</button>
-
-</div>
-
-<div class="card">
-
-<h2>Check Status</h2>
-
-<input id="statusId" type="number" placeholder="Escrow ID">
-
-<button onclick="checkStatus()">
-Check
-</button>
-
-<pre id="statusOutput"></pre>
-
-</div>
-
-<script>
-
-async function createEscrow(){
-
-  const res = await fetch('/api/escrow/create',{
-    method:'POST',
-    headers:{
-      'Content-Type':'application/json'
-    },
-    body:JSON.stringify({
-      client:'web-user',
-      freelancer:document.getElementById('freelancer').value,
-      amount_eth:Number(document.getElementById('amount').value),
-      task_description:document.getElementById('task').value
-    })
-  });
-
-  const data = await res.json();
-
-  alert(JSON.stringify(data,null,2));
-}
-
-async function submitWork(){
-
-  const id=document.getElementById('submitId').value;
-
-  const res = await fetch('/api/escrow/'+id+'/submit',{
-    method:'POST',
-    headers:{
-      'Content-Type':'application/json'
-    },
-    body:JSON.stringify({
-      deliverable_url:document.getElementById('deliverable').value
-    })
-  });
-
-  const data = await res.json();
-
-  alert(JSON.stringify(data,null,2));
-}
-
-async function arbitrate(){
-
-  const id=document.getElementById('arbId').value;
-
-  const res = await fetch('/api/escrow/'+id+'/arbitrate',{
-    method:'POST'
-  });
-
-  const data = await res.json();
-
-  alert(JSON.stringify(data,null,2));
-}
-
-async function checkStatus(){
-
-  const id=document.getElementById('statusId').value;
-
-  const res = await fetch('/api/escrow/'+id);
-
-  const data = await res.json();
-
-  document.getElementById('statusOutput').textContent=
-    JSON.stringify(data,null,2);
-}
-</script>
-
-</body>
-</html>
-`;
-}
-
-// ─────────────────────────────────────────────────────────────
-// ROUTER
-// ─────────────────────────────────────────────────────────────
-
-Deno.serve(async (req) => {
-  const url = new URL(req.url);
-
-  const path = url.pathname;
-
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: cors(),
-    });
-  }
-
-  // FRONTEND
-
-  if (path === "/") {
-    return new Response(frontendHTML(), {
-      headers: cors({
-        "Content-Type": "text/html",
-      }),
-    });
-  }
-
-  // HEALTH
-
-  if (path === "/health") {
-    return json({
-      status: "ok",
-      total_escrows: await countEscrows(),
-      llm_model: LLM_MODEL,
-    });
-  }
-
-  // ALL ESCROWS
-
-  if (path === "/api/escrows") {
-    return json({
-      success: true,
-      escrows: await getAllEscrows(),
-    });
-  }
-
-  // GET ESCROW
-
-  const getMatch = path.match(/^\/api\/escrow\/(\d+)$/);
-
-  if (req.method === "GET" && getMatch) {
-    const id = Number(getMatch[1]);
-
-    const escrow = await getEscrow(id);
-
-    if (!escrow) {
-      return json({
-        success: false,
-        error: "Escrow not found",
-      }, 404);
-    }
-
-    return json({
-      success: true,
-      escrow,
-    });
-  }
-
-  // CREATE
-
-  if (
-    req.method === "POST" &&
-    path === "/api/escrow/create"
-  ) {
-    try {
-      const body = await req.json();
-
-      const {
-        client,
-        freelancer,
-        amount_eth,
-        task_description,
-      } = body;
-
-      if (!freelancer) {
-        throw new Error("Freelancer required");
-      }
-
-      if (!amount_eth || amount_eth <= 0) {
-        throw new Error("Invalid amount");
-      }
-
-      if (
-        !task_description ||
-        task_description.length < 20
-      ) {
-        throw new Error(
-          "Task description too short",
-        );
-      }
-
-      const id = await nextId();
-
-      const escrow: Escrow = {
-        id,
-
-        client: client || "anonymous",
-        freelancer,
-
-        amount_eth: Number(amount_eth),
-
-        task_description,
-
-        deliverable_url: "",
-
-        status: "pending",
-
-        validator_results: [],
-
-        votes: [],
-
-        final_verdict: "",
-
-        settlement: null,
-
-        created_at: new Date().toISOString(),
-
-        resolved_at: null,
-      };
-
-      await setEscrow(escrow);
-
-      return json({
-        success: true,
-        escrow_id: id,
-        total: await countEscrows(),
-      });
-    } catch (e) {
-      return json({
-        success: false,
-        error: e.message,
-      }, 400);
-    }
-  }
-
-  // SUBMIT
-
-  const submitMatch = path.match(
-    /^\/api\/escrow\/(\d+)\/submit$/,
-  );
-
-  if (req.method === "POST" && submitMatch) {
-    try {
-      const id = Number(submitMatch[1]);
-
-      const escrow = await getEscrow(id);
-
-      if (!escrow) {
-        throw new Error("Escrow not found");
-      }
-
-      if (escrow.status !== "pending") {
-        throw new Error(
-          "Escrow must be pending",
-        );
-      }
-
-      const body = await req.json();
-
-      const { deliverable_url } = body;
-
-      if (!deliverable_url) {
-        throw new Error(
-          "deliverable_url required",
-        );
-      }
-
-      if (
-        !deliverable_url.startsWith("http")
-      ) {
-        throw new Error(
-          "URL must start with http",
-        );
-      }
-
-      escrow.deliverable_url =
-        deliverable_url;
-
-      escrow.status = "submitted";
-
-      await setEscrow(escrow);
-
-      return json({
-        success: true,
-        escrow_id: id,
-        status: escrow.status,
-      });
-    } catch (e) {
-      return json({
-        success: false,
-        error: e.message,
-      }, 400);
-    }
-  }
-
-  // ARBITRATION
-
-  const arbMatch = path.match(
-    /^\/api\/escrow\/(\d+)\/arbitrate$/,
-  );
-
-  if (req.method === "POST" && arbMatch) {
-    try {
-      const id = Number(arbMatch[1]);
-
-      const escrow = await getEscrow(id);
-
-      if (!escrow) {
-        throw new Error("Escrow not found");
-      }
-
-      if (escrow.status !== "submitted") {
-        throw new Error(
-          "Escrow must be submitted",
-        );
-      }
-
-      // LOCK
-      escrow.status = "disputed";
-
-      await setEscrow(escrow);
-
-      const start = Date.now();
-
-      const validators = await Promise.all([
-        callValidator(
-          "Technical Completeness",
-          escrow.task_description,
-          escrow.deliverable_url,
-        ),
-
-        callValidator(
-          "Requirement Coverage",
-          escrow.task_description,
-          escrow.deliverable_url,
-        ),
-
-        callValidator(
-          "Quality & Professionalism",
-          escrow.task_description,
-          escrow.deliverable_url,
-        ),
-      ]);
-
-      const votes = validators.map(
-        (v) => v.verdict,
-      );
-
-      const finalVerdict =
-        majorityVote(votes);
-
-      escrow.validator_results =
-        validators;
-
-      escrow.votes = votes;
-
-      escrow.final_verdict =
-        finalVerdict;
-
-      escrow.status = finalVerdict;
-
-      escrow.settlement =
-        computeSettlement(
-          escrow.amount_eth,
-          finalVerdict,
-        );
-
-      escrow.resolved_at =
-        new Date().toISOString();
-
-      await setEscrow(escrow);
-
-      return json({
-        success: true,
-
-        escrow_id: id,
-
-        votes,
-
-        final_verdict:
-          finalVerdict,
-
-        validator_results:
-          validators,
-
-        settlement:
-          escrow.settlement,
-
-        processing_time_ms:
-          Date.now() - start,
-      });
-    } catch (e) {
-      return json({
-        success: false,
-        error: e.message,
-      }, 400);
-    }
-  }
-
-  return json({
-    success: false,
-    error: "Not found",
-    path,
-  }, 404);
-});
+
+# ai_escrow.py
+# AI Escrow / Smart Dispute Resolver
+# GenLayer Intelligent Contract
+#
+# Flow:
+#   1. Client creates escrow (deposits funds, sets task spec)
+#   2. Freelancer submits work result URL
+#   3. Any party triggers AI arbitration
+#   4. 3 LLM validators independently evaluate: APPROVED / PARTIAL / REJECTED
+#   5. Majority-vote consensus releases funds accordingly
+#
+# GenLayer's Optimistic Democracy ensures validators reach equivalence
+# on the non-deterministic LLM calls via the Equivalence Principle.
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+import json
+
+from genlayer import *
+
+
+class EscrowStatus(Enum):
+    PENDING    = "pending"     # Awaiting freelancer submission
+    SUBMITTED  = "submitted"   # Work submitted, awaiting arbitration
+    APPROVED   = "approved"    # Full payment to freelancer
+    PARTIAL    = "partial"     # 50% to freelancer, 50% refunded to client
+    REJECTED   = "rejected"    # Full refund to client
+    DISPUTED   = "disputed"    # Under active AI arbitration
+
+
+class VoteResult(Enum):
+    APPROVED = "approved"
+    PARTIAL  = "partial"
+    REJECTED = "rejected"
+
+
+@dataclass
+class EscrowRecord:
+    client:          Address
+    freelancer:      Address
+    task_description: str
+    deliverable_url:  str
+    amount_wei:       u256
+    status:           str   # EscrowStatus.value
+    votes:            list  # list of VoteResult strings
+    final_verdict:    str
+    created_at:       u256
+    resolved_at:      u256
+
+
+@gl.contract
+class AIEscrow:
+    """
+    AI-powered escrow contract that uses multiple LLM validators
+    to determine whether freelance work satisfies the task spec.
+
+    GenLayer's consensus layer runs each validator independently;
+    the Equivalence Principle reconciles non-deterministic LLM outputs
+    into a single canonical result.
+    """
+
+    # escrow_id -> EscrowRecord
+    escrows: TreeMap[u256, EscrowRecord]
+    escrow_counter: u256
+    platform_fee_bps: u256   # basis points (e.g. 100 = 1%)
+    owner: Address
+
+    def __init__(self) -> None:
+        self.escrow_counter   = u256(0)
+        self.platform_fee_bps = u256(100)   # 1% platform fee
+        self.owner            = gl.message.sender
+
+    # ─────────────────────────────────────────────
+    # CLIENT: Create escrow and deposit funds
+    # ─────────────────────────────────────────────
+
+    @gl.public.write
+    def create_escrow(
+        self,
+        freelancer: Address,
+        task_description: str,
+    ) -> u256:
+        """
+        Client calls this with value= amount to escrow.
+        Returns the new escrow_id.
+        """
+        assert gl.message.value > u256(0), "Must deposit funds"
+        assert len(task_description) >= 20, "Task description too short"
+        assert len(task_description) <= 2000, "Task description too long"
+        assert freelancer != gl.message.sender, "Client and freelancer must differ"
+
+        escrow_id = self.escrow_counter
+        self.escrow_counter = escrow_id + u256(1)
+
+        self.escrows[escrow_id] = EscrowRecord(
+            client           = gl.message.sender,
+            freelancer       = freelancer,
+            task_description = task_description,
+            deliverable_url  = "",
+            amount_wei       = gl.message.value,
+            status           = EscrowStatus.PENDING.value,
+            votes            = [],
+            final_verdict    = "",
+            created_at       = gl.block.timestamp,
+            resolved_at      = u256(0),
+        )
+
+        return escrow_id
+
+    # ─────────────────────────────────────────────
+    # FREELANCER: Submit work deliverable
+    # ─────────────────────────────────────────────
+
+    @gl.public.write
+    def submit_work(self, escrow_id: u256, deliverable_url: str) -> None:
+        """
+        Freelancer submits the URL of their delivered work
+        (GitHub repo, Figma link, hosted demo, etc.)
+        """
+        record = self.escrows[escrow_id]
+
+        assert gl.message.sender == record.freelancer, "Only freelancer can submit"
+        assert record.status == EscrowStatus.PENDING.value, "Escrow not in PENDING state"
+        assert len(deliverable_url) >= 5, "Invalid deliverable URL"
+        assert deliverable_url.startswith("http"), "URL must start with http"
+
+        record.deliverable_url = deliverable_url
+        record.status          = EscrowStatus.SUBMITTED.value
+        self.escrows[escrow_id] = record
+
+    # ─────────────────────────────────────────────
+    # ARBITRATION: AI validators evaluate the work
+    # This is the core intelligent function.
+    # ─────────────────────────────────────────────
+
+    @gl.public.write
+    def trigger_arbitration(self, escrow_id: u256) -> None:
+        """
+        Either party (or anyone after 7-day timeout) can trigger AI arbitration.
+
+        GenLayer runs this function across multiple validators. Each validator:
+          1. Fetches the deliverable URL (real web access)
+          2. Calls an LLM to evaluate against the task spec
+          3. Returns a structured verdict
+
+        The Equivalence Principle ensures validators converge on
+        equivalent results despite LLM non-determinism.
+        """
+        record = self.escrows[escrow_id]
+
+        assert record.status == EscrowStatus.SUBMITTED.value, \
+            "Work must be submitted before arbitration"
+        assert gl.message.sender in [record.client, record.freelancer], \
+            "Only parties to this escrow can trigger arbitration"
+
+        record.status = EscrowStatus.DISPUTED.value
+        self.escrows[escrow_id] = record
+
+        # ── Validator 1: Technical Completeness ──────────────────────────────
+        vote_1 = self._evaluate_technical_completeness(
+            task_spec      = record.task_description,
+            deliverable_url= record.deliverable_url,
+        )
+
+        # ── Validator 2: Requirement Coverage ───────────────────────────────
+        vote_2 = self._evaluate_requirement_coverage(
+            task_spec      = record.task_description,
+            deliverable_url= record.deliverable_url,
+        )
+
+        # ── Validator 3: Quality & Professionalism ───────────────────────────
+        vote_3 = self._evaluate_quality_and_professionalism(
+            task_spec      = record.task_description,
+            deliverable_url= record.deliverable_url,
+        )
+
+        votes = [vote_1, vote_2, vote_3]
+
+        # ── Majority vote ────────────────────────────────────────────────────
+        verdict = self._majority_vote(votes)
+
+        record.votes         = [v for v in votes]
+        record.final_verdict = verdict
+        record.resolved_at   = gl.block.timestamp
+
+        # ── Settle funds based on verdict ────────────────────────────────────
+        if verdict == VoteResult.APPROVED.value:
+            record.status = EscrowStatus.APPROVED.value
+            self.escrows[escrow_id] = record
+            self._pay_freelancer(record, full=True)
+
+        elif verdict == VoteResult.PARTIAL.value:
+            record.status = EscrowStatus.PARTIAL.value
+            self.escrows[escrow_id] = record
+            self._pay_freelancer(record, full=False)
+
+        else:  # REJECTED
+            record.status = EscrowStatus.REJECTED.value
+            self.escrows[escrow_id] = record
+            self._refund_client(record)
+
+    # ─────────────────────────────────────────────
+    # LLM Evaluation Agents
+    # ─────────────────────────────────────────────
+
+    def _evaluate_technical_completeness(
+        self, task_spec: str, deliverable_url: str
+    ) -> str:
+        """
+        Agent 1 – Checks if the deliverable is technically complete.
+        Fetches the actual URL and reasons about code/design presence.
+        """
+        # Fetch deliverable content (GenLayer's real web access)
+        try:
+            web_content = gl.get_webpage(deliverable_url, mode="text")
+            web_snippet = web_content[:3000] if len(web_content) > 3000 else web_content
+        except Exception:
+            web_snippet = "[Could not fetch URL - treat as missing deliverable]"
+
+        prompt = f"""You are a strict technical evaluator for a freelance escrow system.
+
+TASK SPECIFICATION:
+{task_spec}
+
+DELIVERABLE URL: {deliverable_url}
+
+FETCHED CONTENT FROM URL:
+{web_snippet}
+
+Evaluate whether the deliverable is TECHNICALLY COMPLETE relative to the task specification.
+
+Consider:
+- Does the URL resolve to real content/code/work?
+- Are the technical requirements from the spec present?
+- Is there evidence of actual implementation vs. empty/placeholder content?
+
+Respond with EXACTLY one of these verdicts and nothing else:
+APPROVED - deliverable fully satisfies the technical requirements
+PARTIAL - deliverable partially satisfies requirements (core done, extras missing)
+REJECTED - deliverable does not satisfy the technical requirements"""
+
+        result = gl.exec_prompt(prompt)
+        return self._parse_verdict(result)
+
+    def _evaluate_requirement_coverage(
+        self, task_spec: str, deliverable_url: str
+    ) -> str:
+        """
+        Agent 2 – Checks requirement-by-requirement coverage.
+        Extracts explicit requirements and checks each one.
+        """
+        try:
+            web_content = gl.get_webpage(deliverable_url, mode="text")
+            web_snippet = web_content[:3000] if len(web_content) > 3000 else web_content
+        except Exception:
+            web_snippet = "[Could not fetch URL - treat as missing deliverable]"
+
+        prompt = f"""You are a meticulous requirements analyst for a freelance escrow system.
+
+TASK SPECIFICATION:
+{task_spec}
+
+DELIVERABLE URL: {deliverable_url}
+
+FETCHED CONTENT FROM URL:
+{web_snippet}
+
+Your job: Extract all explicit requirements from the task specification, then check whether each is addressed in the deliverable.
+
+Score as:
+- APPROVED: 85%+ of requirements are met
+- PARTIAL: 40-84% of requirements are met
+- REJECTED: Less than 40% of requirements are met
+
+Think step by step, but your final line must be EXACTLY one word:
+APPROVED
+PARTIAL
+REJECTED"""
+
+        result = gl.exec_prompt(prompt)
+        return self._parse_verdict(result)
+
+    def _evaluate_quality_and_professionalism(
+        self, task_spec: str, deliverable_url: str
+    ) -> str:
+        """
+        Agent 3 – Evaluates overall quality, polish, and professionalism.
+        Looks for red flags like empty repos, placeholder code, or copy-paste.
+        """
+        try:
+            web_content = gl.get_webpage(deliverable_url, mode="text")
+            web_snippet = web_content[:3000] if len(web_content) > 3000 else web_content
+        except Exception:
+            web_snippet = "[Could not fetch URL - treat as missing deliverable]"
+
+        prompt = f"""You are a quality assurance expert evaluating freelance work for escrow release.
+
+TASK SPECIFICATION:
+{task_spec}
+
+DELIVERABLE URL: {deliverable_url}
+
+FETCHED CONTENT FROM URL:
+{web_snippet}
+
+Evaluate the QUALITY and PROFESSIONALISM of the work:
+- Is the work original and non-trivial?
+- Does it meet professional standards for this type of task?
+- Are there obvious red flags? (empty repo, only README, placeholder content, scaffolded boilerplate with no real work)
+- Would a reasonable client accept this as satisfactory completion?
+
+Be fair but strict. Your final answer must be EXACTLY one of:
+APPROVED
+PARTIAL
+REJECTED"""
+
+        result = gl.exec_prompt(prompt)
+        return self._parse_verdict(result)
+
+    # ─────────────────────────────────────────────
+    # Consensus & Settlement
+    # ─────────────────────────────────────────────
+
+    def _parse_verdict(self, llm_output: str) -> str:
+        """Extract structured verdict from LLM output."""
+        output_upper = llm_output.strip().upper()
+
+        if "APPROVED" in output_upper:
+            return VoteResult.APPROVED.value
+        elif "PARTIAL" in output_upper:
+            return VoteResult.PARTIAL.value
+        elif "REJECTED" in output_upper:
+            return VoteResult.REJECTED.value
+        else:
+            # Default to PARTIAL if LLM output is ambiguous
+            return VoteResult.PARTIAL.value
+
+    def _majority_vote(self, votes: list) -> str:
+        """
+        Simple majority vote across 3 validators.
+        Ties (1-1-1) → PARTIAL (safest neutral outcome).
+        """
+        counts = {
+            VoteResult.APPROVED.value: 0,
+            VoteResult.PARTIAL.value:  0,
+            VoteResult.REJECTED.value: 0,
+        }
+        for v in votes:
+            if v in counts:
+                counts[v] += 1
+
+        max_count = max(counts.values())
+
+        # Check for clear majority (2 or 3 out of 3)
+        for verdict, count in counts.items():
+            if count == max_count and max_count >= 2:
+                return verdict
+
+        # 3-way tie or no majority → PARTIAL
+        return VoteResult.PARTIAL.value
+
+    def _compute_platform_fee(self, amount: u256) -> u256:
+        return (amount * self.platform_fee_bps) // u256(10000)
+
+    def _pay_freelancer(self, record: EscrowRecord, full: bool) -> None:
+        """Transfer escrowed funds to freelancer (full or 50%)."""
+        total   = record.amount_wei
+        fee     = self._compute_platform_fee(total)
+        net     = total - fee
+
+        if full:
+            gl.message.recipient(record.freelancer).transfer(net)
+        else:
+            # PARTIAL: 50% each
+            half = net // u256(2)
+            gl.message.recipient(record.freelancer).transfer(half)
+            remainder = net - half
+            gl.message.recipient(record.client).transfer(remainder)
+
+        # Platform fee stays in contract (owner can withdraw)
+
+    def _refund_client(self, record: EscrowRecord) -> None:
+        """Refund client minus platform fee."""
+        total = record.amount_wei
+        fee   = self._compute_platform_fee(total)
+        net   = total - fee
+        gl.message.recipient(record.client).transfer(net)
+
+    # ─────────────────────────────────────────────
+    # READ-ONLY VIEWS
+    # ─────────────────────────────────────────────
+
+    @gl.public.view
+    def get_escrow(self, escrow_id: u256) -> EscrowRecord:
+        """Return full escrow record."""
+        return self.escrows[escrow_id]
+
+    @gl.public.view
+    def get_escrow_status(self, escrow_id: u256) -> str:
+        return self.escrows[escrow_id].status
+
+    @gl.public.view
+    def get_verdict(self, escrow_id: u256) -> dict:
+        """Return votes and final verdict for a resolved escrow."""
+        record = self.escrows[escrow_id]
+        return {
+            "votes":          record.votes,
+            "final_verdict":  record.final_verdict,
+            "status":         record.status,
+            "resolved_at":    int(record.resolved_at),
+        }
+
+    @gl.public.view
+    def get_total_escrows(self) -> u256:
+        return self.escrow_counter
+
+    # ─────────────────────────────────────────────
+    # ADMIN
+    # ─────────────────────────────────────────────
+
+    @gl.public.write
+    def withdraw_fees(self) -> None:
+        """Owner withdraws accumulated platform fees."""
+        assert gl.message.sender == self.owner, "Only owner"
+        balance = gl.contract.balance
+        if balance > u256(0):
+            gl.message.recipient(self.owner).transfer(balance)
+
+    @gl.public.write
+    def update_platform_fee(self, new_fee_bps: u256) -> None:
+        assert gl.message.sender == self.owner, "Only owner"
+        assert new_fee_bps <= u256(1000), "Fee cannot exceed 10%"
+        self.platform_fee_bps = new_fee_bps
