@@ -1,11 +1,11 @@
 // ── AI Escrow Backend — main.ts ────────────────────────────────────────────
 // Deploy on Deno Deploy. Serves frontend + full REST API.
-// Uses Groq API for 3-agent arbitration.
+// Uses Groq API for 3-agent arbitration + Deno KV for persistent storage.
 
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
 const LLM_MODEL = Deno.env.get("LLM_PROVIDER") ?? "llama-3.1-8b-instant";
 
-// ── In-memory storage ──────────────────────────────────────────────────────
+// ── Persistent storage via Deno KV ────────────────────────────────────────
 interface Escrow {
   id: number;
   client: string;
@@ -19,10 +19,38 @@ interface Escrow {
   created_at: string;
 }
 
-const escrows = new Map<number, Escrow>();
-let escrowCounter = 0;
+const kv = await Deno.openKv();
 
-// ── CORS headers ───────────────────────────────────────────────────────────
+async function getEscrow(id: number): Promise<Escrow | null> {
+  const res = await kv.get<Escrow>(["escrow", id]);
+  return res.value;
+}
+
+async function setEscrow(escrow: Escrow): Promise<void> {
+  await kv.set(["escrow", escrow.id], escrow);
+}
+
+async function nextId(): Promise<number> {
+  const res = await kv.get<number>(["counter"]);
+  const id = res.value ?? 0;
+  await kv.set(["counter"], id + 1);
+  return id;
+}
+
+async function countEscrows(): Promise<number> {
+  const res = await kv.get<number>(["counter"]);
+  return res.value ?? 0;
+}
+
+async function getAllEscrows(): Promise<Escrow[]> {
+  const list: Escrow[] = [];
+  for await (const entry of kv.list<Escrow>({ prefix: ["escrow"] })) {
+    list.push(entry.value);
+  }
+  return list;
+}
+
+// ── CORS ──────────────────────────────────────────────────────────────────
 function cors(headers: HeadersInit = {}): Headers {
   const h = new Headers(headers);
   h.set("Access-Control-Allow-Origin", "*");
@@ -38,7 +66,7 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-// ── AI Agent call via Groq ─────────────────────────────────────────────────
+// ── AI Agent via Groq ─────────────────────────────────────────────────────
 async function callAgent(
   agentRole: string,
   taskDescription: string,
@@ -73,10 +101,8 @@ Your verdict (one word only):`;
         messages: [{ role: "user", content: prompt }],
       }),
     });
-
     const data = await res.json();
     const text = data?.choices?.[0]?.message?.content?.trim().toLowerCase() ?? "";
-
     if (text.includes("approved")) return "approved";
     if (text.includes("rejected")) return "rejected";
     return "partial";
@@ -85,20 +111,19 @@ Your verdict (one word only):`;
   }
 }
 
-// ── Majority vote ──────────────────────────────────────────────────────────
+// ── Majority vote ─────────────────────────────────────────────────────────
 function majority(votes: string[]): string {
-  const count: Record<string, number> = { approved: 0, partial: 0, rejected: 0 };
-  votes.forEach((v) => { if (count[v] !== undefined) count[v]++; });
-  const max = Math.max(...Object.values(count));
-  for (const [k, v] of Object.entries(count)) {
+  const c: Record<string, number> = { approved: 0, partial: 0, rejected: 0 };
+  votes.forEach((v) => { if (c[v] !== undefined) c[v]++; });
+  const max = Math.max(...Object.values(c));
+  for (const [k, v] of Object.entries(c)) {
     if (v === max && max >= 2) return k;
   }
   return "partial";
 }
 
-// ── Frontend HTML ──────────────────────────────────────────────────────────
+// ── Frontend HTML ─────────────────────────────────────────────────────────
 function frontendHTML(): string {
-  // Inline the frontend — API_BASE points to same origin
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -108,12 +133,7 @@ function frontendHTML(): string {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg:#080a0f;--surface:#0e1118;--border:#1c2030;--border2:#252d40;
-    --accent:#00e5ff;--accent2:#7b61ff;--warn:#ff6b35;--green:#00ff88;
-    --red:#ff3b5c;--text:#e8eaf0;--muted:#5a6380;
-    --mono:'JetBrains Mono',monospace;--display:'Syne',sans-serif;
-  }
+  :root{--bg:#080a0f;--surface:#0e1118;--border:#1c2030;--border2:#252d40;--accent:#00e5ff;--accent2:#7b61ff;--warn:#ff6b35;--green:#00ff88;--red:#ff3b5c;--text:#e8eaf0;--muted:#5a6380;--mono:'JetBrains Mono',monospace;--display:'Syne',sans-serif}
   *{margin:0;padding:0;box-sizing:border-box}
   body{background:var(--bg);color:var(--text);font-family:var(--display);min-height:100vh;overflow-x:hidden}
   body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(0,229,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
@@ -254,7 +274,6 @@ function frontendHTML(): string {
     <button class="tab" onclick="switchTab('status',this)">📊 Check Status</button>
   </div>
 
-  <!-- CREATE -->
   <div id="tab-create" class="tab-panel active">
     <div class="section-title">New Escrow</div>
     <div class="card">
@@ -273,7 +292,6 @@ function frontendHTML(): string {
     <div class="terminal" id="createLog" style="display:none"></div>
   </div>
 
-  <!-- SUBMIT -->
   <div id="tab-submit" class="tab-panel">
     <div class="section-title">Submit Deliverable</div>
     <div class="card">
@@ -284,7 +302,6 @@ function frontendHTML(): string {
     <div class="terminal" id="submitLog" style="display:none"></div>
   </div>
 
-  <!-- ARBITRATE -->
   <div id="tab-arbitrate" class="tab-panel">
     <div class="section-title">AI Arbitration</div>
     <div class="card">
@@ -309,7 +326,6 @@ function frontendHTML(): string {
     <div class="terminal" id="arbitrateLog" style="display:none"></div>
   </div>
 
-  <!-- STATUS -->
   <div id="tab-status" class="tab-panel">
     <div class="section-title">Escrow Status</div>
     <div class="card">
@@ -332,9 +348,6 @@ function frontendHTML(): string {
 </div>
 
 <script>
-  // Same-origin — no need for absolute URL
-  const API_BASE = '';
-
   function switchTab(name, btn) {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -358,10 +371,10 @@ function frontendHTML(): string {
     const amount = document.getElementById('escrowAmount').value;
     const taskSpec = document.getElementById('taskSpec').value.trim();
     if (!freelancer || !amount || !taskSpec) { log('createLog','ERROR: all fields required','err'); return; }
-    if (taskSpec.length < 20) { log('createLog','ERROR: task spec too short','err'); return; }
+    if (taskSpec.length < 20) { log('createLog','ERROR: task spec too short (min 20 chars)','err'); return; }
     log('createLog','Sending create_escrow transaction...','info');
     try {
-      const res = await fetch(API_BASE+'/api/escrow/create', {
+      const res = await fetch('/api/escrow/create', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({freelancer, amount_eth: amount, task_description: taskSpec, client: 'web-user'})
       });
@@ -380,17 +393,19 @@ function frontendHTML(): string {
   async function submitWork() {
     const id = document.getElementById('submitEscrowId').value;
     const url = document.getElementById('deliverableUrl').value.trim();
-    if (!id || !url) { log('submitLog','ERROR: fill all fields','err'); return; }
-    if (!url.startsWith('http')) { log('submitLog','ERROR: URL must start with http','err'); return; }
+    if (id === '') { log('submitLog','ERROR: fill all fields','err'); return; }
+    if (!url || !url.startsWith('http')) { log('submitLog','ERROR: valid URL required','err'); return; }
     log('submitLog','Submitting deliverable for escrow #'+id+'...','info');
     try {
-      const res = await fetch(API_BASE+'/api/escrow/'+id+'/submit', {
+      const res = await fetch('/api/escrow/'+id+'/submit', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({deliverable_url: url})
       });
       const data = await res.json();
-      if (data.success) { log('submitLog','✓ Work submitted: '+url,'ok'); log('submitLog','Status → SUBMITTED','info'); }
-      else { log('submitLog','ERROR: '+data.error,'err'); }
+      if (data.success) {
+        log('submitLog','✓ Work submitted: '+url,'ok');
+        log('submitLog','Status → SUBMITTED','info');
+      } else { log('submitLog','ERROR: '+data.error,'err'); }
     } catch(e) { log('submitLog','ERROR: '+e.message,'err'); }
   }
 
@@ -400,7 +415,6 @@ function frontendHTML(): string {
     const url = document.getElementById('arbitrateDeliverableUrl').value.trim();
     if (!task) { log('arbitrateLog','ERROR: Task specification required','err'); return; }
     if (!url) { log('arbitrateLog','ERROR: Deliverable URL required','err'); return; }
-
     const btn = document.getElementById('arbitrateBtn');
     btn.disabled = true;
     btn.innerHTML = '<span class="loader"></span> Running 3 AI Agents...';
@@ -408,12 +422,10 @@ function frontendHTML(): string {
     document.getElementById('verdictBox').className = 'verdict-box';
     ['agent1','agent2','agent3'].forEach(a => { document.getElementById(a).className='agent-card thinking'; });
     ['a1verdict','a2verdict','a3verdict'].forEach(a => { document.getElementById(a).textContent='...'; document.getElementById(a).style.color='var(--accent)'; });
-
     log('arbitrateLog','Starting AI arbitration...','info');
     log('arbitrateLog','Sending to 3 independent AI agents...','info');
-
     try {
-      const res = await fetch(API_BASE+'/api/trigger-arbitration', {
+      const res = await fetch('/api/trigger-arbitration', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({escrow_id: parseInt(id)||0, task_description: task, deliverable_url: url})
       });
@@ -425,7 +437,7 @@ function frontendHTML(): string {
           document.getElementById(el).className='agent-card done-'+v;
           document.getElementById('a'+(i+1)+'verdict').textContent=v.toUpperCase();
           document.getElementById('a'+(i+1)+'verdict').style.color=v==='approved'?'var(--green)':v==='rejected'?'var(--red)':'var(--warn)';
-          log('arbitrateLog','Agent '+(i+1)+' → '+v.toUpperCase(), v==='approved'?'ok':v==='rejected'?'err':'warn');
+          log('arbitrateLog','Agent '+(i+1)+' → '+v.toUpperCase(),v==='approved'?'ok':v==='rejected'?'err':'warn');
         });
         const verdict = data.final_verdict;
         const cfg = {approved:{emoji:'✅',label:'APPROVED',desc:'Full payment released to freelancer.'},partial:{emoji:'⚡',label:'PARTIAL',desc:'50% to freelancer · 50% refunded to client.'},rejected:{emoji:'❌',label:'REJECTED',desc:'Full refund to client.'}}[verdict]||{emoji:'⚡',label:'PARTIAL',desc:''};
@@ -438,16 +450,15 @@ function frontendHTML(): string {
         if (data.processing_time_ms) log('arbitrateLog','Processing time: '+data.processing_time_ms+'ms','info');
       } else { log('arbitrateLog','ERROR: '+(data.error||'Unknown'),'err'); }
     } catch(e) { log('arbitrateLog','Connection error: '+e.message,'err'); }
-
     btn.disabled=false;
     btn.innerHTML='<span>Trigger AI Arbitration</span> →';
   }
 
   async function checkStatus() {
     const id = document.getElementById('statusId').value;
-    if (!id) return;
+    if (id === '') return;
     try {
-      const res = await fetch(API_BASE+'/api/escrow/'+id);
+      const res = await fetch('/api/escrow/'+id);
       const data = await res.json();
       if (data.success) {
         document.getElementById('statusIdDisplay').textContent=id;
@@ -458,11 +469,10 @@ function frontendHTML(): string {
         document.getElementById('statusPill').className='status-pill '+data.status;
         document.getElementById('statusText').textContent=data.status.toUpperCase();
         document.getElementById('statusResult').style.display='block';
-      }
+      } else { alert('Escrow not found'); }
     } catch(e) { alert('Error: '+e.message); }
   }
 
-  // Ping
   (async()=>{
     try {
       const r = await fetch('/health');
@@ -476,161 +486,119 @@ function frontendHTML(): string {
 </html>`;
 }
 
-// ── Router ─────────────────────────────────────────────────────────────────
+// ── Router ────────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request): Promise<Response> => {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
 
-  // Preflight
-  if (method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: cors() });
-  }
+  if (method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
 
-  // ── GET / — serve frontend ───────────────────────────────────────────────
   if (method === "GET" && (path === "/" || path === "")) {
     return new Response(frontendHTML(), {
       headers: cors({ "Content-Type": "text/html; charset=utf-8" }),
     });
   }
 
-  // ── GET /health ──────────────────────────────────────────────────────────
   if (method === "GET" && path === "/health") {
-    return json({
-      status: "ok",
-      version: "4.0",
-      message: "AI Escrow Backend — Full API",
-      network: "DENO-DEPLOY",
-      total_escrows: escrows.size,
-      endpoints: [
-        "GET  /health",
-        "GET  /api/escrows",
-        "GET  /api/escrow/:id",
-        "POST /api/escrow/create",
-        "POST /api/escrow/:id/submit",
-        "POST /api/escrow/:id/arbitrate",
-        "POST /api/trigger-arbitration",
-      ],
-    });
+    const total = await countEscrows();
+    return json({ status: "ok", version: "4.0", network: "DENO-DEPLOY", total_escrows: total });
   }
 
-  // ── GET /api/escrows ─────────────────────────────────────────────────────
   if (method === "GET" && path === "/api/escrows") {
-    return json({ success: true, escrows: Array.from(escrows.values()) });
+    const all = await getAllEscrows();
+    return json({ success: true, escrows: all });
   }
 
-  // ── GET /api/escrow/:id ──────────────────────────────────────────────────
   const getMatch = path.match(/^\/api\/escrow\/(\d+)$/);
   if (method === "GET" && getMatch) {
     const id = parseInt(getMatch[1]);
-    const escrow = escrows.get(id);
+    const escrow = await getEscrow(id);
     if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
     return json({ success: true, ...escrow });
   }
 
-  // ── POST /api/escrow/create ──────────────────────────────────────────────
   if (method === "POST" && path === "/api/escrow/create") {
     try {
       const body = await req.json();
       const { freelancer, amount_eth, task_description, client } = body;
-
       if (!freelancer || !amount_eth || !task_description) {
-        return json({ success: false, error: "Missing required fields: freelancer, amount_eth, task_description" }, 400);
+        return json({ success: false, error: "Missing fields: freelancer, amount_eth, task_description" }, 400);
       }
-
-      const id = escrowCounter++;
+      const id = await nextId();
       const escrow: Escrow = {
-        id,
-        client: client || "anonymous",
-        freelancer,
-        amount_eth: String(amount_eth),
-        task_description,
-        deliverable_url: "",
-        status: "pending",
-        votes: [],
-        final_verdict: "",
+        id, client: client || "anonymous", freelancer,
+        amount_eth: String(amount_eth), task_description,
+        deliverable_url: "", status: "pending",
+        votes: [], final_verdict: "",
         created_at: new Date().toISOString(),
       };
-      escrows.set(id, escrow);
-
-      return json({ success: true, escrow_id: id, total: escrows.size, record: escrow });
+      await setEscrow(escrow);
+      const total = await countEscrows();
+      return json({ success: true, escrow_id: id, total, record: escrow });
     } catch {
-      return json({ success: false, error: "Invalid JSON body" }, 400);
+      return json({ success: false, error: "Invalid JSON" }, 400);
     }
   }
 
-  // ── POST /api/escrow/:id/submit ──────────────────────────────────────────
   const submitMatch = path.match(/^\/api\/escrow\/(\d+)\/submit$/);
   if (method === "POST" && submitMatch) {
     const id = parseInt(submitMatch[1]);
-    const escrow = escrows.get(id);
+    const escrow = await getEscrow(id);
     if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
-
     try {
       const body = await req.json();
-      const { deliverable_url } = body;
-      if (!deliverable_url) return json({ success: false, error: "deliverable_url required" }, 400);
-
-      escrow.deliverable_url = deliverable_url;
+      if (!body.deliverable_url) return json({ success: false, error: "deliverable_url required" }, 400);
+      escrow.deliverable_url = body.deliverable_url;
       escrow.status = "submitted";
-      escrows.set(id, escrow);
-
+      await setEscrow(escrow);
       return json({ success: true, escrow_id: id, status: "submitted" });
     } catch {
-      return json({ success: false, error: "Invalid JSON body" }, 400);
+      return json({ success: false, error: "Invalid JSON" }, 400);
     }
   }
 
-  // ── POST /api/escrow/:id/arbitrate ───────────────────────────────────────
   const arbMatch = path.match(/^\/api\/escrow\/(\d+)\/arbitrate$/);
   if (method === "POST" && arbMatch) {
     const id = parseInt(arbMatch[1]);
-    const escrow = escrows.get(id);
+    const escrow = await getEscrow(id);
     if (!escrow) return json({ success: false, error: "Escrow not found" }, 404);
-    if (escrow.status !== "submitted") return json({ success: false, error: "Escrow must be in submitted status" }, 400);
-
+    if (escrow.status !== "submitted") return json({ success: false, error: "Escrow must be submitted first" }, 400);
     const start = Date.now();
     const [v1, v2, v3] = await Promise.all([
-      callAgent("Technical Completeness — evaluate if the deliverable is technically complete", escrow.task_description, escrow.deliverable_url),
-      callAgent("Requirement Coverage — evaluate if all requirements are met", escrow.task_description, escrow.deliverable_url),
-      callAgent("Quality & Professionalism — evaluate the quality of the work", escrow.task_description, escrow.deliverable_url),
+      callAgent("Technical Completeness", escrow.task_description, escrow.deliverable_url),
+      callAgent("Requirement Coverage", escrow.task_description, escrow.deliverable_url),
+      callAgent("Quality & Professionalism", escrow.task_description, escrow.deliverable_url),
     ]);
     const votes = [v1, v2, v3];
     const final_verdict = majority(votes);
-
     escrow.votes = votes;
     escrow.final_verdict = final_verdict;
     escrow.status = final_verdict as Escrow["status"];
-    escrows.set(id, escrow);
-
+    await setEscrow(escrow);
     return json({ success: true, escrow_id: id, votes, final_verdict, processing_time_ms: Date.now() - start });
   }
 
-  // ── POST /api/trigger-arbitration ────────────────────────────────────────
   if (method === "POST" && path === "/api/trigger-arbitration") {
     try {
       const body = await req.json();
       const { task_description, deliverable_url } = body;
-
       if (!task_description || !deliverable_url) {
         return json({ success: false, error: "task_description and deliverable_url required" }, 400);
       }
-
       const start = Date.now();
       const [v1, v2, v3] = await Promise.all([
-        callAgent("Technical Completeness — evaluate if the deliverable is technically complete", task_description, deliverable_url),
-        callAgent("Requirement Coverage — evaluate if all requirements are met", task_description, deliverable_url),
-        callAgent("Quality & Professionalism — evaluate the quality of the work", task_description, deliverable_url),
+        callAgent("Technical Completeness", task_description, deliverable_url),
+        callAgent("Requirement Coverage", task_description, deliverable_url),
+        callAgent("Quality & Professionalism", task_description, deliverable_url),
       ]);
       const votes = [v1, v2, v3];
       const final_verdict = majority(votes);
-
       return json({ success: true, votes, final_verdict, processing_time_ms: Date.now() - start });
     } catch {
-      return json({ success: false, error: "Invalid JSON body" }, 400);
+      return json({ success: false, error: "Invalid JSON" }, 400);
     }
   }
 
-  // ── 404 ──────────────────────────────────────────────────────────────────
   return json({ error: "Not Found", path }, 404);
 });
