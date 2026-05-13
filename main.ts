@@ -1,49 +1,118 @@
-// ── AI Escrow — Production Ready (Improved) ─────────────────────────────
-// ℹ️ Requires: deno.json + GROQ_API_KEY in environment variables
-// ℹ️ Run locally:
+// ─────────────────────────────────────────────────────────────
+// AI ESCROW — GENLAYER STYLE EXECUTION RUNTIME
+// main.ts
+//
+// Deno Deploy / Deno KV compatible
+//
+// Features:
+// - Contract-parity lifecycle
+// - 3 independent AI validators
+// - Consensus / majority vote
+// - Settlement simulation
+// - Disputed state
+// - Validator reasoning
+// - Platform fee simulation
+// - GenLayer-style execution flow
+//
+// Run locally:
 // deno run --unstable-kv --allow-env --allow-net main.ts
+//
+// Required ENV:
+// GROQ_API_KEY=xxx
+// LLM_PROVIDER=llama-3.1-8b-instant
+// ─────────────────────────────────────────────────────────────
 
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
 const LLM_MODEL =
   Deno.env.get("LLM_PROVIDER") ?? "llama-3.1-8b-instant";
 
+const PLATFORM_FEE_BPS = 100; // 1%
+
+type EscrowStatus =
+  | "pending"
+  | "submitted"
+  | "disputed"
+  | "approved"
+  | "partial"
+  | "rejected";
+
+type VoteResult = "approved" | "partial" | "rejected";
+
+interface ValidatorResult {
+  validator: string;
+  verdict: VoteResult;
+  reasoning: string;
+}
+
+interface Settlement {
+  freelancer_payout_eth: number;
+  client_refund_eth: number;
+  platform_fee_eth: number;
+}
+
 interface Escrow {
   id: number;
+
   client: string;
   freelancer: string;
-  amount_eth: string;
+
+  amount_eth: number;
+
   task_description: string;
   deliverable_url: string;
-  status:
-    | "pending"
-    | "submitted"
-    | "approved"
-    | "partial"
-    | "rejected";
-  votes: string[];
-  final_verdict: string;
+
+  status: EscrowStatus;
+
+  validator_results: ValidatorResult[];
+
+  votes: VoteResult[];
+
+  final_verdict: VoteResult | "";
+
+  settlement: Settlement | null;
+
   created_at: string;
+  resolved_at: string | null;
 }
 
 const kv = await Deno.openKv();
 
-console.info("✅ Deno KV initialized successfully");
+console.log("✅ KV initialized");
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────────────────────
+
+function cors(headers: HeadersInit = {}) {
+  const h = new Headers(headers);
+
+  h.set("Access-Control-Allow-Origin", "*");
+  h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  h.set("Access-Control-Allow-Headers", "Content-Type");
+
+  return h;
+}
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: cors({
+      "Content-Type": "application/json",
+    }),
+  });
+}
 
 async function logAudit(
   action: string,
   details: Record<string, unknown>,
 ) {
-  const entry = {
+  await kv.set(["audit", Date.now()], {
     action,
     details,
     timestamp: new Date().toISOString(),
-  };
+  });
 
-  await kv.set(["log", Date.now()], entry);
-
-  console.info(`📜 AUDIT: ${action}`, JSON.stringify(details));
+  console.log("📜", action, details);
 }
 
 async function getEscrow(id: number): Promise<Escrow | null> {
@@ -51,7 +120,7 @@ async function getEscrow(id: number): Promise<Escrow | null> {
   return res.value ?? null;
 }
 
-async function setEscrow(escrow: Escrow): Promise<void> {
+async function setEscrow(escrow: Escrow) {
   await kv.set(["escrow", escrow.id], escrow);
 
   await logAudit("escrow_updated", {
@@ -60,33 +129,19 @@ async function setEscrow(escrow: Escrow): Promise<void> {
   });
 }
 
-// ✅ FIXED: atomic counter (race-condition safe)
-async function nextId(): Promise<number> {
-  while (true) {
-    const counter = await kv.get<number>(["counter"]);
+async function nextId() {
+  const counter = await kv.get<number>(["counter"]);
 
-    const current = counter.value ?? 0;
+  const id = counter.value ?? 0;
 
-    const res = await kv.atomic()
-      .check(counter)
-      .set(["counter"], current + 1)
-      .commit();
+  await kv.set(["counter"], id + 1);
 
-    if (res.ok) {
-      console.info(
-        `🆔 Generated ID: ${current} (counter updated to ${current + 1})`,
-      );
-
-      return current;
-    }
-
-    console.warn("⚠️ Counter race detected, retrying...");
-  }
+  return id;
 }
 
-async function countEscrows(): Promise<number> {
-  const res = await kv.get<number>(["counter"]);
-  return res.value ?? 0;
+async function countEscrows() {
+  const counter = await kv.get<number>(["counter"]);
+  return counter.value ?? 0;
 }
 
 async function getAllEscrows(): Promise<Escrow[]> {
@@ -101,48 +156,120 @@ async function getAllEscrows(): Promise<Escrow[]> {
   return list;
 }
 
-function cors(headers: HeadersInit = {}): Headers {
-  const h = new Headers(headers);
+// ─────────────────────────────────────────────────────────────
+// CONSENSUS
+// ─────────────────────────────────────────────────────────────
 
-  h.set("Access-Control-Allow-Origin", "*");
-  h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  h.set("Access-Control-Allow-Headers", "Content-Type");
-
-  return h;
+function computePlatformFee(amount: number) {
+  return Number(
+    ((amount * PLATFORM_FEE_BPS) / 10000).toFixed(6),
+  );
 }
 
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: cors({
-      "Content-Type": "application/json",
-    }),
-  });
+function computeSettlement(
+  amount: number,
+  verdict: VoteResult,
+): Settlement {
+  const fee = computePlatformFee(amount);
+
+  const net = amount - fee;
+
+  if (verdict === "approved") {
+    return {
+      freelancer_payout_eth: Number(net.toFixed(6)),
+      client_refund_eth: 0,
+      platform_fee_eth: fee,
+    };
+  }
+
+  if (verdict === "partial") {
+    return {
+      freelancer_payout_eth: Number((net / 2).toFixed(6)),
+      client_refund_eth: Number((net / 2).toFixed(6)),
+      platform_fee_eth: fee,
+    };
+  }
+
+  return {
+    freelancer_payout_eth: 0,
+    client_refund_eth: Number(net.toFixed(6)),
+    platform_fee_eth: fee,
+  };
 }
 
-// ── AI Validators ────────────────────────────────────────────────────────
+function majorityVote(votes: VoteResult[]): VoteResult {
+  const counts = {
+    approved: 0,
+    partial: 0,
+    rejected: 0,
+  };
 
-async function callAgent(
-  role: string,
+  for (const v of votes) {
+    counts[v]++;
+  }
+
+  let max = 0;
+  let winner: VoteResult = "partial";
+
+  for (const [k, v] of Object.entries(counts)) {
+    if (v > max) {
+      max = v;
+      winner = k as VoteResult;
+    }
+  }
+
+  if (max >= 2) return winner;
+
+  return "partial";
+}
+
+function parseVerdict(text: string): VoteResult {
+  const t = text.trim().toLowerCase();
+
+  if (t === "approved") return "approved";
+  if (t === "rejected") return "rejected";
+  if (t === "partial") return "partial";
+
+  return "partial";
+}
+
+// ─────────────────────────────────────────────────────────────
+// AI AGENTS
+// ─────────────────────────────────────────────────────────────
+
+async function callValidator(
+  validator: string,
   task: string,
   url: string,
-): Promise<"approved" | "partial" | "rejected"> {
+): Promise<ValidatorResult> {
+  if (!GROQ_API_KEY) {
+    return {
+      validator,
+      verdict: "partial",
+      reasoning: "Missing GROQ_API_KEY",
+    };
+  }
+
   const prompt = `
-You are an AI escrow arbitration agent.
+You are an AI validator for a GenLayer intelligent escrow contract.
 
-Role:
-${role}
+VALIDATOR ROLE:
+${validator}
 
-Task:
+TASK:
 ${task}
 
-Deliverable URL:
+DELIVERABLE URL:
 ${url}
 
-Respond with EXACTLY ONE WORD:
-approved
-partial
-rejected
+Evaluate the work.
+
+Return STRICT JSON only:
+
+{
+  "verdict": "approved" | "partial" | "rejected",
+  "reasoning": "short explanation"
+}
 `;
 
   try {
@@ -151,12 +278,13 @@ rejected
       {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           model: LLM_MODEL,
-          max_tokens: 10,
+          temperature: 0.2,
+          max_tokens: 120,
           messages: [
             {
               role: "user",
@@ -169,160 +297,232 @@ rejected
 
     const data = await res.json();
 
-    const text = data?.choices?.[0]?.message?.content
-      ?.trim()
-      ?.toLowerCase() ?? "";
+    const content =
+      data?.choices?.[0]?.message?.content ?? "";
 
-    if (text.includes("approved")) return "approved";
-    if (text.includes("rejected")) return "rejected";
+    let parsed;
 
-    return "partial";
-  } catch (e) {
-    console.warn("⚠️ AI agent failed:", e);
-
-    return "partial";
-  }
-}
-
-// ✅ safer consensus logic
-function majority(votes: string[]): string {
-  const counts: Record<string, number> = {
-    approved: 0,
-    partial: 0,
-    rejected: 0,
-  };
-
-  for (const v of votes) {
-    if (counts[v] !== undefined) {
-      counts[v]++;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return {
+        validator,
+        verdict: "partial",
+        reasoning: "Validator returned invalid JSON",
+      };
     }
+
+    return {
+      validator,
+      verdict: parseVerdict(parsed.verdict ?? ""),
+      reasoning:
+        String(parsed.reasoning ?? "").slice(0, 300),
+    };
+  } catch (e) {
+    return {
+      validator,
+      verdict: "partial",
+      reasoning: "Validator error: " + e.message,
+    };
   }
-
-  if (counts.approved >= 2) return "approved";
-  if (counts.rejected >= 2) return "rejected";
-
-  return "partial";
 }
 
-// ── Frontend ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// FRONTEND
+// ─────────────────────────────────────────────────────────────
 
-function frontendHTML(): string {
+function frontendHTML() {
   return `
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <title>AI Escrow</title>
+<meta charset="UTF-8">
+<title>AI Escrow</title>
+
+<style>
+body{
+  background:#0b0f18;
+  color:white;
+  font-family:Arial;
+  max-width:900px;
+  margin:auto;
+  padding:40px;
+}
+
+.card{
+  background:#121826;
+  padding:20px;
+  border-radius:14px;
+  margin-bottom:20px;
+}
+
+input,textarea{
+  width:100%;
+  padding:12px;
+  margin-top:8px;
+  margin-bottom:16px;
+  background:#0b1220;
+  border:1px solid #263041;
+  color:white;
+  border-radius:8px;
+}
+
+button{
+  padding:12px 18px;
+  border:none;
+  border-radius:10px;
+  cursor:pointer;
+  background:#00d4ff;
+  font-weight:bold;
+}
+
+pre{
+  overflow:auto;
+  background:#081018;
+  padding:14px;
+  border-radius:10px;
+}
+
+.status{
+  padding:6px 12px;
+  border-radius:999px;
+  display:inline-block;
+  font-size:12px;
+  margin-bottom:10px;
+  background:#182338;
+}
+
+h1{
+  margin-bottom:30px;
+}
+</style>
 </head>
-<body style="background:#0b0f1a;color:white;font-family:sans-serif;padding:40px">
+
+<body>
 
 <h1>⚖️ AI Escrow</h1>
 
-<h3>Create Escrow</h3>
+<div class="card">
 
-<input id="freelancer" placeholder="Freelancer address"><br><br>
-<input id="amount" placeholder="ETH amount"><br><br>
+<h2>Create Escrow</h2>
 
-<textarea id="task" placeholder="Task description"></textarea><br><br>
+<input id="freelancer" placeholder="0xFreelancer">
 
-<button onclick="createEscrow()">Create Escrow</button>
+<input id="amount" type="number" placeholder="ETH amount">
 
-<hr>
+<textarea id="task" placeholder="Task description"></textarea>
 
-<h3>Submit Work</h3>
+<button onclick="createEscrow()">
+Create Escrow
+</button>
 
-<input id="submitId" placeholder="Escrow ID"><br><br>
-<input id="url" placeholder="Deliverable URL"><br><br>
+</div>
 
-<button onclick="submitWork()">Submit</button>
+<div class="card">
 
-<hr>
+<h2>Submit Work</h2>
 
-<h3>Run Arbitration</h3>
+<input id="submitId" type="number" placeholder="Escrow ID">
 
-<input id="arbId" placeholder="Escrow ID"><br><br>
+<input id="deliverable" placeholder="https://github.com/...">
 
-<button onclick="runArb()">Arbitrate</button>
+<button onclick="submitWork()">
+Submit
+</button>
 
-<hr>
+</div>
 
-<pre id="log"></pre>
+<div class="card">
+
+<h2>Run Arbitration</h2>
+
+<input id="arbId" type="number" placeholder="Escrow ID">
+
+<button onclick="arbitrate()">
+Arbitrate
+</button>
+
+</div>
+
+<div class="card">
+
+<h2>Check Status</h2>
+
+<input id="statusId" type="number" placeholder="Escrow ID">
+
+<button onclick="checkStatus()">
+Check
+</button>
+
+<pre id="statusOutput"></pre>
+
+</div>
 
 <script>
 
-function log(msg) {
-  document.getElementById("log").textContent += msg + "\\n";
-}
+async function createEscrow(){
 
-async function createEscrow() {
-  const freelancer =
-    document.getElementById("freelancer").value;
-
-  const amount =
-    document.getElementById("amount").value;
-
-  const task =
-    document.getElementById("task").value;
-
-  const res = await fetch("/api/escrow/create", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
+  const res = await fetch('/api/escrow/create',{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json'
     },
-    body: JSON.stringify({
-      freelancer,
-      amount_eth: amount,
-      task_description: task,
-      client: "web-user"
+    body:JSON.stringify({
+      client:'web-user',
+      freelancer:document.getElementById('freelancer').value,
+      amount_eth:Number(document.getElementById('amount').value),
+      task_description:document.getElementById('task').value
     })
   });
 
   const data = await res.json();
 
-  log(JSON.stringify(data, null, 2));
+  alert(JSON.stringify(data,null,2));
 }
 
-async function submitWork() {
-  const id =
-    document.getElementById("submitId").value;
+async function submitWork(){
 
-  const url =
-    document.getElementById("url").value;
+  const id=document.getElementById('submitId').value;
 
-  const res = await fetch(
-    "/api/escrow/" + id + "/submit",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        deliverable_url: url
-      })
-    }
-  );
+  const res = await fetch('/api/escrow/'+id+'/submit',{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json'
+    },
+    body:JSON.stringify({
+      deliverable_url:document.getElementById('deliverable').value
+    })
+  });
 
   const data = await res.json();
 
-  log(JSON.stringify(data, null, 2));
+  alert(JSON.stringify(data,null,2));
 }
 
-async function runArb() {
-  const id =
-    document.getElementById("arbId").value;
+async function arbitrate(){
 
-  const res = await fetch(
-    "/api/escrow/" + id + "/arbitrate",
-    {
-      method: "POST"
-    }
-  );
+  const id=document.getElementById('arbId').value;
+
+  const res = await fetch('/api/escrow/'+id+'/arbitrate',{
+    method:'POST'
+  });
 
   const data = await res.json();
 
-  log(JSON.stringify(data, null, 2));
+  alert(JSON.stringify(data,null,2));
 }
 
+async function checkStatus(){
+
+  const id=document.getElementById('statusId').value;
+
+  const res = await fetch('/api/escrow/'+id);
+
+  const data = await res.json();
+
+  document.getElementById('statusOutput').textContent=
+    JSON.stringify(data,null,2);
+}
 </script>
 
 </body>
@@ -330,57 +530,56 @@ async function runArb() {
 `;
 }
 
-// ── Router ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// ROUTER
+// ─────────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request): Promise<Response> => {
+Deno.serve(async (req) => {
   const url = new URL(req.url);
 
   const path = url.pathname;
 
-  const method = req.method;
-
-  if (method === "OPTIONS") {
+  if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: cors(),
     });
   }
 
-  // ── Frontend ───────────────────────────────────────────────────────────
+  // FRONTEND
 
-  if (method === "GET" && (path === "/" || path === "")) {
+  if (path === "/") {
     return new Response(frontendHTML(), {
       headers: cors({
-        "Content-Type": "text/html; charset=utf-8",
+        "Content-Type": "text/html",
       }),
     });
   }
 
-  // ── Health ─────────────────────────────────────────────────────────────
+  // HEALTH
 
-  if (method === "GET" && path === "/health") {
+  if (path === "/health") {
     return json({
       status: "ok",
-      version: "5.0",
-      network: "DENO-DEPLOY",
       total_escrows: await countEscrows(),
+      llm_model: LLM_MODEL,
     });
   }
 
-  // ── All escrows ────────────────────────────────────────────────────────
+  // ALL ESCROWS
 
-  if (method === "GET" && path === "/api/escrows") {
+  if (path === "/api/escrows") {
     return json({
       success: true,
       escrows: await getAllEscrows(),
     });
   }
 
-  // ── Single escrow ──────────────────────────────────────────────────────
+  // GET ESCROW
 
   const getMatch = path.match(/^\/api\/escrow\/(\d+)$/);
 
-  if (method === "GET" && getMatch) {
+  if (req.method === "GET" && getMatch) {
     const id = Number(getMatch[1]);
 
     const escrow = await getEscrow(id);
@@ -394,35 +593,40 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     return json({
       success: true,
-      ...escrow,
+      escrow,
     });
   }
 
-  // ── Create escrow ──────────────────────────────────────────────────────
+  // CREATE
 
-  if (method === "POST" && path === "/api/escrow/create") {
+  if (
+    req.method === "POST" &&
+    path === "/api/escrow/create"
+  ) {
     try {
+      const body = await req.json();
+
       const {
+        client,
         freelancer,
         amount_eth,
         task_description,
-        client,
-      } = await req.json();
+      } = body;
 
       if (!freelancer) {
         throw new Error("Freelancer required");
       }
 
-      if (!amount_eth || Number(amount_eth) <= 0) {
-        throw new Error("Invalid escrow amount");
+      if (!amount_eth || amount_eth <= 0) {
+        throw new Error("Invalid amount");
       }
 
       if (
         !task_description ||
-        task_description.trim().length < 20
+        task_description.length < 20
       ) {
         throw new Error(
-          "Task description too short (min 20 chars)",
+          "Task description too short",
         );
       }
 
@@ -430,22 +634,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       const escrow: Escrow = {
         id,
+
         client: client || "anonymous",
         freelancer,
-        amount_eth: String(amount_eth),
+
+        amount_eth: Number(amount_eth),
+
         task_description,
+
         deliverable_url: "",
+
         status: "pending",
+
+        validator_results: [],
+
         votes: [],
+
         final_verdict: "",
+
+        settlement: null,
+
         created_at: new Date().toISOString(),
+
+        resolved_at: null,
       };
 
       await setEscrow(escrow);
-
-      console.info(
-        `💼 Escrow #${id} created (${amount_eth} ETH)`,
-      );
 
       return json({
         success: true,
@@ -460,12 +674,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
-  // ── Submit work ────────────────────────────────────────────────────────
+  // SUBMIT
 
-  const submitMatch =
-    path.match(/^\/api\/escrow\/(\d+)\/submit$/);
+  const submitMatch = path.match(
+    /^\/api\/escrow\/(\d+)\/submit$/,
+  );
 
-  if (method === "POST" && submitMatch) {
+  if (req.method === "POST" && submitMatch) {
     try {
       const id = Number(submitMatch[1]);
 
@@ -475,35 +690,36 @@ Deno.serve(async (req: Request): Promise<Response> => {
         throw new Error("Escrow not found");
       }
 
-      // ✅ prevent re-submit
       if (escrow.status !== "pending") {
         throw new Error(
-          "Escrow already submitted or finalized",
+          "Escrow must be pending",
         );
       }
 
-      const { deliverable_url } = await req.json();
+      const body = await req.json();
+
+      const { deliverable_url } = body;
 
       if (!deliverable_url) {
-        throw new Error("deliverable_url required");
+        throw new Error(
+          "deliverable_url required",
+        );
       }
 
       if (
-        !deliverable_url.match(/^https?:\/\//i)
+        !deliverable_url.startsWith("http")
       ) {
         throw new Error(
-          "URL must start with http:// or https://",
+          "URL must start with http",
         );
       }
 
-      escrow.deliverable_url = deliverable_url;
+      escrow.deliverable_url =
+        deliverable_url;
+
       escrow.status = "submitted";
 
       await setEscrow(escrow);
-
-      console.info(
-        `📦 Escrow #${id} submitted`,
-      );
 
       return json({
         success: true,
@@ -518,12 +734,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
-  // ── Arbitration ────────────────────────────────────────────────────────
+  // ARBITRATION
 
-  const arbMatch =
-    path.match(/^\/api\/escrow\/(\d+)\/arbitrate$/);
+  const arbMatch = path.match(
+    /^\/api\/escrow\/(\d+)\/arbitrate$/,
+  );
 
-  if (method === "POST" && arbMatch) {
+  if (req.method === "POST" && arbMatch) {
     try {
       const id = Number(arbMatch[1]);
 
@@ -535,63 +752,83 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       if (escrow.status !== "submitted") {
         throw new Error(
-          "Escrow must be submitted first",
+          "Escrow must be submitted",
         );
       }
 
-      // ✅ prevent re-arbitration
-      if (escrow.final_verdict) {
-        throw new Error(
-          "Arbitration already completed",
-        );
-      }
+      // LOCK
+      escrow.status = "disputed";
+
+      await setEscrow(escrow);
 
       const start = Date.now();
 
-      console.info(
-        `🤖 Starting arbitration for escrow #${id}`,
-      );
-
-      const [v1, v2, v3] = await Promise.all([
-        callAgent(
+      const validators = await Promise.all([
+        callValidator(
           "Technical Completeness",
           escrow.task_description,
           escrow.deliverable_url,
         ),
 
-        callAgent(
+        callValidator(
           "Requirement Coverage",
           escrow.task_description,
           escrow.deliverable_url,
         ),
 
-        callAgent(
+        callValidator(
           "Quality & Professionalism",
           escrow.task_description,
           escrow.deliverable_url,
         ),
       ]);
 
-      const votes = [v1, v2, v3];
+      const votes = validators.map(
+        (v) => v.verdict,
+      );
 
-      const final_verdict = majority(votes);
+      const finalVerdict =
+        majorityVote(votes);
+
+      escrow.validator_results =
+        validators;
 
       escrow.votes = votes;
-      escrow.final_verdict = final_verdict;
-      escrow.status = final_verdict as Escrow["status"];
+
+      escrow.final_verdict =
+        finalVerdict;
+
+      escrow.status = finalVerdict;
+
+      escrow.settlement =
+        computeSettlement(
+          escrow.amount_eth,
+          finalVerdict,
+        );
+
+      escrow.resolved_at =
+        new Date().toISOString();
 
       await setEscrow(escrow);
 
-      console.info(
-        `🏁 Escrow #${id} verdict: ${final_verdict}`,
-      );
-
       return json({
         success: true,
+
         escrow_id: id,
+
         votes,
-        final_verdict,
-        processing_time_ms: Date.now() - start,
+
+        final_verdict:
+          finalVerdict,
+
+        validator_results:
+          validators,
+
+        settlement:
+          escrow.settlement,
+
+        processing_time_ms:
+          Date.now() - start,
       });
     } catch (e) {
       return json({
@@ -601,11 +838,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
-  // ── Not Found ──────────────────────────────────────────────────────────
-
   return json({
     success: false,
-    error: "Not Found",
+    error: "Not found",
     path,
   }, 404);
 });
