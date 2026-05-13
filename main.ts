@@ -531,9 +531,8 @@ async function triggerArbitration(){
       setResult('a-result','✅ Consensus reached: '+badge(d.final_verdict)+'<br/><div class="votes-row" style="margin-top:8px">'+votesHtml+'</div>');
       showToast('Arbitration complete: '+d.final_verdict);
       loadList(); loadStats(); loadLogs();
-      // Auto-open detail
-      $('stid').value=id;
-      inspectEscrow(id);
+      // Auto-inspect after arbitration
+      setTimeout(()=>inspectEscrow(id), 300);
     }else{
       setResult('a-result','❌ '+(d.error||'Failed'),true);
       showToast(d.error||'Failed','error');
@@ -589,7 +588,6 @@ async function loadStats(){
 }
 
 async function inspectEscrow(id){
-  if(!id) id=$('stid')?$('stid').value:0;
   if(!id) return;
   try{
     const r=await fetch('/api/escrow/'+id);
