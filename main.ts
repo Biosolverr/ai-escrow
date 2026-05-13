@@ -51,7 +51,12 @@ async function addLog(action: string, data: Record<string, unknown>) {
   const key = ["audit_log"];
   const res = await kv.get<string[]>(key);
   let logs = res.value ?? [];
-  const entry = Object.assign({ t: Date.now(), action }, data);
+  // Explicit serialization to ensure all data is captured
+  const entry = {
+    t: Date.now(),
+    action,
+    data: JSON.parse(JSON.stringify(data)) // force deep serialization
+  };
   logs.push(JSON.stringify(entry));
   if (logs.length > 500) logs = logs.slice(-500);
   await kv.set(key, logs);
@@ -641,9 +646,10 @@ async function loadLogs(){
         const p=JSON.parse(entry);
         const div=document.createElement('div');
         div.className='entry';
+        const dataStr = typeof p.data === 'string' ? p.data : JSON.stringify(p.data || {});
         div.innerHTML='<span class="time">'+new Date(p.t).toLocaleTimeString()+'</span>'+
           '<span class="action">'+p.action+'</span>'+
-          '<span class="data">'+JSON.stringify(p.data||{})+'</span>';
+          '<span class="data">'+dataStr+'</span>';
         el.appendChild(div);
       }catch(e){}
     });
