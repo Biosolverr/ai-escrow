@@ -1,11 +1,7 @@
 // main.ts
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+console.log("🚀 AI Escrow Backend starting...");
 
-const PORT = parseInt(Deno.env.get("PORT") || "8000");
-
-console.log(`🚀 AI Escrow Backend (Real Groq Agents) запущен на порту ${PORT}`);
-
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   const path = url.pathname;
 
@@ -23,8 +19,8 @@ serve(async (req: Request) => {
   if (path === "/" || path === "/health") {
     return Response.json({
       status: "ok",
-      message: "AI Escrow Backend — Real 3 LLM Agents",
-      port: PORT
+      message: "AI Escrow Backend — Real Groq Agents",
+      version: "1.0"
     }, { headers });
   }
 
@@ -51,7 +47,7 @@ serve(async (req: Request) => {
     }, { headers });
   }
 
-  // ====================== TRIGGER ARBITRATION ======================
+  // ====================== TRIGGER ARBITRATION (3 Groq Agents) ======================
   if (path === "/api/trigger-arbitration" && req.method === "POST") {
     const { escrow_id, task_description, deliverable_url } = await req.json();
 
@@ -77,10 +73,10 @@ serve(async (req: Request) => {
   return new Response("Not Found", { status: 404, headers });
 });
 
-// ==================== GROQ HELPERS ====================
+// ==================== GROQ + 3 AGENTS ====================
 async function callGroq(prompt: string): Promise<string> {
   const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
-  if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY is not set");
+  if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY is not configured");
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -92,73 +88,38 @@ async function callGroq(prompt: string): Promise<string> {
       model: "llama-3.1-8b-instant",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.6,
-      max_tokens: 400,
+      max_tokens: 300,
     }),
   });
 
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || "Groq API error");
-  
+
   return data.choices[0].message.content.trim();
 }
 
-// ==================== 3 AGENTS ====================
 async function runThreeRealAgents(task: string, url: string): Promise<string[]> {
-  const agentPrompts = [
-    // Agent 1: Technical Completeness
-    `You are a strict technical evaluator for a freelance escrow system.
-
-TASK SPECIFICATION:
-${task}
-
-DELIVERABLE URL: ${url}
-
-Respond with EXACTLY one word: APPROVED, PARTIAL or REJECTED`,
-
-    // Agent 2: Requirement Coverage
-    `You are a meticulous requirements analyst for a freelance escrow system.
-
-TASK SPECIFICATION:
-${task}
-
-DELIVERABLE URL: ${url}
-
-Respond with EXACTLY one word: APPROVED, PARTIAL or REJECTED`,
-
-    // Agent 3: Quality & Professionalism
-    `You are a quality assurance expert evaluating freelance work for escrow release.
-
-TASK SPECIFICATION:
-${task}
-
-DELIVERABLE URL: ${url}
-
-Respond with EXACTLY one word: APPROVED, PARTIAL or REJECTED`
+  const prompts = [
+    `You are a strict technical evaluator.\n\nTASK: ${task}\n\nURL: ${url}\n\nAnswer with exactly one word: APPROVED, PARTIAL or REJECTED`,
+    `You are a meticulous requirements analyst.\n\nTASK: ${task}\n\nURL: ${url}\n\nAnswer with exactly one word: APPROVED, PARTIAL or REJECTED`,
+    `You are a quality assurance expert.\n\nTASK: ${task}\n\nURL: ${url}\n\nAnswer with exactly one word: APPROVED, PARTIAL or REJECTED`
   ];
 
   const votes: string[] = [];
-  const names = ["Technical", "Requirements", "Quality"];
 
   for (let i = 0; i < 3; i++) {
     try {
-      const result = await callGroq(agentPrompts[i]);
-      const vote = parseVerdict(result);
+      const result = await callGroq(prompts[i]);
+      const vote = result.toUpperCase().includes("APPROVED") ? "approved" :
+                   result.toUpperCase().includes("REJECTED") ? "rejected" : "partial";
       votes.push(vote);
-      console.log(`✅ Agent ${names[i]}: ${vote}`);
+      console.log(`Agent ${i+1}: ${vote}`);
     } catch (e) {
-      console.error(`Agent ${i+1} failed`, e);
+      console.error(`Agent ${i+1} failed:`, e);
       votes.push("partial");
     }
   }
-
   return votes;
-}
-
-function parseVerdict(text: string): string {
-  const t = text.toUpperCase();
-  if (t.includes("APPROVED")) return "approved";
-  if (t.includes("REJECTED")) return "rejected";
-  return "partial";
 }
 
 function getMajorityVote(votes: string[]): string {
