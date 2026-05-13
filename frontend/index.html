@@ -752,6 +752,10 @@
     <div class="card">
       <label>Escrow ID</label>
       <input type="number" id="arbitrateId" placeholder="0">
+      <label>Task Specification</label>
+      <textarea id="arbitrateTaskSpec" placeholder="Describe the task requirements that were agreed upon..."></textarea>
+      <label>Deliverable URL</label>
+      <input type="text" id="arbitrateDeliverableUrl" placeholder="https://github.com/user/repo">
 
       <div class="agents" id="agentsDisplay" style="display:none">
         <div class="agent-card" id="agent1">
@@ -824,10 +828,10 @@
 
 <script>
   // ── Config ─────────────────────────────────────────────────────────────────
-  // Backend URL — замени после деплоя на Deno Deploy
+  const API_BASE = 'https://ai-escrow-r0071a7h74xv.biosolverr.deno.net';
   const API = window.location.hostname === 'localhost'
     ? 'http://localhost:8000'
-    : 'https://ai-escrow-api.deno.dev';  // ← заменить после деплоя
+    : API_BASE;
 
   // ── Tabs ───────────────────────────────────────────────────────────────────
   function switchTab(name) {
@@ -851,7 +855,7 @@
 
   // ── Simulate demo mode (no real backend yet) ───────────────────────────────
   // Заглушка — реальные вызовы пойдут через бекенд на Deno
-  const DEMO_MODE = true;
+  const DEMO_MODE = false;
 
   let escrowCounter = 0;
   const escrows = {};
@@ -947,17 +951,21 @@
 
   // ── Arbitration ────────────────────────────────────────────────────────────
   async function triggerArbitration() {
-    const id = document.getElementById('arbitrateId').value;
-    if (id === '') { log('arbitrateLog', 'ERROR: enter escrow ID', 'err'); return; }
+    const id      = document.getElementById('arbitrateId').value.trim();
+    const task    = document.getElementById('arbitrateTaskSpec').value.trim();
+    const url     = document.getElementById('arbitrateDeliverableUrl').value.trim();
+
+    if (!url) { log('arbitrateLog', 'ERROR: Deliverable URL is required', 'err'); return; }
+    if (!task) { log('arbitrateLog', 'ERROR: Task specification is required', 'err'); return; }
 
     const btn = document.getElementById('arbitrateBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="loader"></span> Running AI Validators...';
+    btn.innerHTML = '<span class="loader"></span> Running 3 AI Agents...';
 
     document.getElementById('agentsDisplay').style.display = 'grid';
     document.getElementById('verdictBox').classList.remove('show','approved','partial','rejected');
 
-    // Reset agents
+    // Reset agents to thinking state
     ['agent1','agent2','agent3'].forEach(a => {
       document.getElementById(a).className = 'agent-card thinking';
     });
@@ -966,49 +974,47 @@
       document.getElementById(a).style.color = 'var(--accent)';
     });
 
-    log('arbitrateLog', `Triggering arbitration for escrow #${id}...`, 'info');
-    log('arbitrateLog', 'Agent 1: Evaluating technical completeness...', 'info');
-
-    if (DEMO_MODE) {
-      // Simulate 3 agents running
-      const verdicts = simulateVerdicts();
-
-      await sleep(1200);
-      setAgentResult('agent1', 'a1verdict', verdicts[0]);
-      log('arbitrateLog', `Agent 1 → ${verdicts[0].toUpperCase()}`, verdicts[0] === 'approved' ? 'ok' : verdicts[0] === 'rejected' ? 'err' : 'warn');
-
-      await sleep(900);
-      log('arbitrateLog', 'Agent 2: Checking requirement coverage...', 'info');
-      setAgentResult('agent2', 'a2verdict', verdicts[1]);
-      log('arbitrateLog', `Agent 2 → ${verdicts[1].toUpperCase()}`, verdicts[1] === 'approved' ? 'ok' : verdicts[1] === 'rejected' ? 'err' : 'warn');
-
-      await sleep(1100);
-      log('arbitrateLog', 'Agent 3: Assessing quality & professionalism...', 'info');
-      setAgentResult('agent3', 'a3verdict', verdicts[2]);
-      log('arbitrateLog', `Agent 3 → ${verdicts[2].toUpperCase()}`, verdicts[2] === 'approved' ? 'ok' : verdicts[2] === 'rejected' ? 'err' : 'warn');
-
-      await sleep(600);
-      const final = majorityVote(verdicts);
-      log('arbitrateLog', `Majority vote: ${final.toUpperCase()} (${verdicts.join(' + ')})`, 'ok');
-      showVerdict(final, verdicts, id);
-
-      btn.disabled = false;
-      btn.innerHTML = '<span>Trigger AI Arbitration</span> →';
-      return;
-    }
+    log('arbitrateLog', `Starting AI arbitration for escrow #${id || 'new'}...`, 'info');
+    log('arbitrateLog', 'Sending to 3 independent AI agents...', 'info');
 
     try {
-      const res = await fetch(`${API}/escrow/${id}/arbitrate`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/trigger-arbitration`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          escrow_id: parseInt(id) || 1,
+          task_description: task,
+          deliverable_url: url
+        })
+      });
+
       const data = await res.json();
-      if (data.verdict) {
-        data.votes.forEach((v, i) => setAgentResult(`agent${i+1}`, `a${i+1}verdict`, v));
-        showVerdict(data.verdict, data.votes, id);
-        log('arbitrateLog', `Final: ${data.verdict.toUpperCase()}`, 'ok');
+
+      if (data.success) {
+        const votes = data.votes || [];
+        ['agent1','agent2','agent3'].forEach((el, i) => {
+          const verdict = votes[i] || 'partial';
+          setAgentResult(el, `a${i+1}verdict`, verdict);
+          log('arbitrateLog', `Agent ${i+1} → ${verdict.toUpperCase()}`,
+            verdict === 'approved' ? 'ok' : verdict === 'rejected' ? 'err' : 'warn');
+        });
+
+        showVerdict(data.final_verdict, votes, id);
+        log('arbitrateLog', `Final Verdict: ${data.final_verdict.toUpperCase()}`, 'ok');
+        if (data.processing_time_ms) {
+          log('arbitrateLog', `Processing time: ${data.processing_time_ms}ms`, 'info');
+        }
       } else {
-        log('arbitrateLog', `ERROR: ${data.error}`, 'err');
+        log('arbitrateLog', `ERROR: ${data.error || 'Unknown error'}`, 'err');
+        ['agent1','agent2','agent3'].forEach(a => {
+          document.getElementById(a).className = 'agent-card';
+        });
       }
     } catch(e) {
-      log('arbitrateLog', `ERROR: ${e.message}`, 'err');
+      log('arbitrateLog', `Connection error: ${e.message}`, 'err');
+      ['agent1','agent2','agent3'].forEach(a => {
+        document.getElementById(a).className = 'agent-card';
+      });
     }
 
     btn.disabled = false;
