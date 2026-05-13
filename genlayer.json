@@ -1,0 +1,34 @@
+{
+  "project": {
+    "name": "ai-escrow",
+    "version": "1.0.0",
+    "description": "AI-powered freelance escrow with multi-LLM dispute resolution on GenLayer"
+  },
+  "contracts": [
+    {
+      "name": "AIEscrow",
+      "path": "contracts/ai_escrow.py",
+      "description": "Smart escrow contract using 3 LLM validators + majority vote consensus"
+    }
+  ],
+  "networks": {
+    "default": "studionet",
+    "studionet": {
+      "rpc_url": "http://localhost:8080",
+      "chain_id": 1337
+    },
+    "testnet": {
+      "rpc_url": "https://rpc.testnet.genlayer.com",
+      "chain_id": 42069
+    },
+    "mainnet": {
+      "rpc_url": "https://rpc.genlayer.com",
+      "chain_id": 42420
+    }
+  },
+  "testing": {
+    "test_dir": "tests",
+    "mock_llm": true,
+    "llm_provider": "openai/gpt-4o"
+  }
+}
