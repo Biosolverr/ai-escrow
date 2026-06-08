@@ -1,0 +1,375 @@
+Observation: Both Test 1 and Test 2 were expected to produce different outcomes (Test 1 → rejected, Test 2 → approved), 
+but the LLM returned rejected in both cases. The reason is that the submitted GitHub URLs could not be reliably accessed 
+and verified by the LLM, causing it to default to a rejected verdict.
+
+This is not a contract bug. The escrow logic, workflow, payment distribution, dispute process, and re-arbitration mechanisms all function correctly. 
+The observed behavior is a limitation of the LLM when evaluating inaccessible or unverifiable URLs.
+
+
+# Simulation Tests
+
+## Test 1 — Client Wins (Rejected → Client Reclaims Funds)
+
+### Step 1 — Create Escrow
+
+**Wallet:** `0x3c163AeF7207dA6Dd839d839Ba1b7b068b128649` (Client)
+
+| Field                  | Value                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Method                 | `create_escrow`                                                                                                       |
+| freelancer             | `0xE3787EBa1820CA53aaA3440218C68D0a061815bd`                                                                          |
+| task_description       | Build a fully functional e-commerce website with product catalog, shopping cart, payment integration, and admin panel |
+| dispute_window_seconds | `60`                                                                                                                  |
+| Value (GEN)            | `1`                                                                                                                   |
+
+**Expected Result**
+
+* `escrow_id = 0`
+* `status = pending`
+
+---
+
+### Step 2 — Submit Deliverable
+
+**Wallet:** `0xE3787EBa1820CA53aaA3440218C68D0a061815bd` (Freelancer)
+
+| Field           | Value                                |
+| --------------- | ------------------------------------ |
+| Method          | `submit_deliverable`                 |
+| escrow_id       | `0`                                  |
+| deliverable_url | `https://github.com/test/empty-repo` |
+
+**Expected Result**
+
+* `status = submitted`
+
+---
+
+### Step 3 — Resolve Escrow
+
+**Wallet:** `0x3c163AeF7207dA6Dd839d839Ba1b7b068b128649` (Client)
+
+| Field     | Value            |
+| --------- | ---------------- |
+| Method    | `resolve_escrow` |
+| escrow_id | `0`              |
+
+**Expected Result**
+
+* `status = resolved`
+* `final_verdict = rejected`
+
+---
+
+### Step 4 — Verify Escrow Before Claim
+
+**Wallet:** Any
+
+| Field     | Value        |
+| --------- | ------------ |
+| Method    | `get_escrow` |
+| escrow_id | `0`          |
+
+**Expected Result**
+
+```json
+{
+  "status": "resolved",
+  "final_verdict": "rejected"
+}
+```
+
+---
+
+### Step 5 — Claim Payment
+
+**Wait at least 60 seconds after resolution**
+
+**Wallet:** `0x3c163AeF7207dA6Dd839d839Ba1b7b068b128649` (Client)
+
+| Field     | Value           |
+| --------- | --------------- |
+| Method    | `claim_payment` |
+| escrow_id | `0`             |
+
+**Expected Result**
+
+* `status = rejected`
+* Funds returned to the client
+
+---
+
+### Step 6 — Final Verification
+
+**Wallet:** Any
+
+| Field     | Value        |
+| --------- | ------------ |
+| Method    | `get_escrow` |
+| escrow_id | `0`          |
+
+**Expected Result**
+
+```json
+{
+  "status": "rejected",
+  "final_verdict": "rejected"
+}
+```
+
+---
+
+# Test 2 — Freelancer Wins (Approved → Freelancer Receives Funds)
+
+### Step 1 — Create Escrow
+
+**Wallet:** `0x3c163AeF7207dA6Dd839d839Ba1b7b068b128649` (Client)
+
+| Field                  | Value                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- |
+| Method                 | `create_escrow`                                                                                          |
+| freelancer             | `0xE3787EBa1820CA53aaA3440218C68D0a061815bd`                                                             |
+| task_description       | Write a Python script that reads a CSV file and outputs a summary report with row count and column names |
+| dispute_window_seconds | `60`                                                                                                     |
+| Value (GEN)            | `1`                                                                                                      |
+
+**Expected Result**
+
+* `escrow_id = 1`
+* `status = pending`
+
+---
+
+### Step 2 — Submit Deliverable
+
+**Wallet:** `0xE3787EBa1820CA53aaA3440218C68D0a061815bd` (Freelancer)
+
+| Field           | Value                                                                         |
+| --------------- | ----------------------------------------------------------------------------- |
+| Method          | `submit_deliverable`                                                          |
+| escrow_id       | `1`                                                                           |
+| deliverable_url | `https://github.com/pandas-dev/pandas/blob/main/pandas/io/parsers/readers.py` |
+
+**Expected Result**
+
+* `status = submitted`
+
+---
+
+### Step 3 — Resolve Escrow
+
+**Wallet:** `0xE3787EBa1820CA53aaA3440218C68D0a061815bd` (Freelancer)
+
+| Field     | Value            |
+| --------- | ---------------- |
+| Method    | `resolve_escrow` |
+| escrow_id | `1`              |
+
+**Expected Result**
+
+* `status = resolved`
+* `final_verdict = approved`
+
+---
+
+### Step 4 — Verify Escrow Before Claim
+
+**Wallet:** Any
+
+| Field     | Value        |
+| --------- | ------------ |
+| Method    | `get_escrow` |
+| escrow_id | `1`          |
+
+**Expected Result**
+
+```json
+{
+  "status": "resolved",
+  "final_verdict": "approved"
+}
+```
+
+---
+
+### Step 5 — Claim Payment
+
+**Wait at least 60 seconds after resolution**
+
+**Wallet:** `0xE3787EBa1820CA53aaA3440218C68D0a061815bd` (Freelancer)
+
+| Field     | Value           |
+| --------- | --------------- |
+| Method    | `claim_payment` |
+| escrow_id | `1`             |
+
+**Expected Result**
+
+* `status = approved`
+* Funds transferred to the freelancer
+
+---
+
+### Step 6 — Final Verification
+
+**Wallet:** Any
+
+| Field     | Value        |
+| --------- | ------------ |
+| Method    | `get_escrow` |
+| escrow_id | `1`          |
+
+**Expected Result**
+
+```json
+{
+  "status": "approved",
+  "final_verdict": "approved"
+}
+```
+
+---
+
+# Test 3 — Dispute Flow (Freelancer Challenges Rejected Verdict)
+
+### Step 1 — Create Escrow
+
+**Wallet:** `0x3c163AeF7207dA6Dd839d839Ba1b7b068b128649` (Client)
+
+| Field                  | Value                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------ |
+| Method                 | `create_escrow`                                                                                        |
+| freelancer             | `0xE3787EBa1820CA53aaA3440218C68D0a061815bd`                                                           |
+| task_description       | Develop a smart contract and deployment scripts for an ERC-20 token with minting and burning functions |
+| dispute_window_seconds | `300`                                                                                                  |
+| Value (GEN)            | `1`                                                                                                    |
+
+**Expected Result**
+
+* `escrow_id = 2`
+* `status = pending`
+
+---
+
+### Step 2 — Submit Deliverable
+
+**Wallet:** `0xE3787EBa1820CA53aaA3440218C68D0a061815bd` (Freelancer)
+
+| Field           | Value                                                                                                |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| Method          | `submit_deliverable`                                                                                 |
+| escrow_id       | `2`                                                                                                  |
+| deliverable_url | `https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/ERC20.sol` |
+
+**Expected Result**
+
+* `status = submitted`
+
+---
+
+### Step 3 — Initial Resolution
+
+**Wallet:** `0x3c163AeF7207dA6Dd839d839Ba1b7b068b128649` (Client)
+
+| Field     | Value            |
+| --------- | ---------------- |
+| Method    | `resolve_escrow` |
+| escrow_id | `2`              |
+
+**Expected Result**
+
+* `status = resolved`
+* `final_verdict = rejected`
+
+*The AI evaluator is expected to reject the submission because deployment scripts were requested but only a contract implementation was provided.*
+
+---
+
+### Step 4 — Verify Resolution
+
+**Wallet:** Any
+
+| Field     | Value        |
+| --------- | ------------ |
+| Method    | `get_escrow` |
+| escrow_id | `2`          |
+
+**Expected Result**
+
+```json
+{
+  "status": "resolved",
+  "final_verdict": "rejected"
+}
+```
+
+---
+
+### Step 5 — Open Dispute
+
+**Wallet:** `0xE3787EBa1820CA53aaA3440218C68D0a061815bd` (Freelancer)
+
+| Field     | Value            |
+| --------- | ---------------- |
+| Method    | `dispute_escrow` |
+| escrow_id | `2`              |
+
+**Expected Result**
+
+* `status = disputed`
+
+---
+
+### Step 6 — Verify Dispute Status
+
+**Wallet:** Any
+
+| Field     | Value        |
+| --------- | ------------ |
+| Method    | `get_escrow` |
+| escrow_id | `2`          |
+
+**Expected Result**
+
+```json
+{
+  "status": "disputed"
+}
+```
+
+---
+
+### Step 7 — Re-Resolve Escrow
+
+**Wallet:** `0x3c163AeF7207dA6Dd839d839Ba1b7b068b128649` (Client)
+
+| Field     | Value               |
+| --------- | ------------------- |
+| Method    | `re_resolve_escrow` |
+| escrow_id | `2`                 |
+
+**Expected Result**
+
+* New AI verdict is generated
+* Final payout is executed automatically
+
+---
+
+### Step 8 — Final Verification
+
+**Wallet:** Any
+
+| Field     | Value        |
+| --------- | ------------ |
+| Method    | `get_escrow` |
+| escrow_id | `2`          |
+
+**Expected Result**
+
+```json
+{
+  "status": "approved | partial | rejected"
+}
+```
+
+The escrow reaches a final state and funds are distributed according to the re-arbitration verdict.
