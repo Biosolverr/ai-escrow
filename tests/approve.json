@@ -3,8 +3,7 @@
   "contract": "AI Escrow",
   "tests_executed": 3,
   "contract_logic_verified": true,
-  "observation": "LLM validators were unable to reliably verify GitHub URLs. As a result, Tests 1 and 2 returned rejected verdicts despite different expected outcomes. 
-  This does not affect escrow workflow validation.",
+  "observation": "LLM validators were unable to reliably verify GitHub URLs. As a result, Tests 1 and 2 returned rejected verdicts despite different expected outcomes. This does not affect escrow workflow validation.",
   "tests": [
     {
       "id": 1,
