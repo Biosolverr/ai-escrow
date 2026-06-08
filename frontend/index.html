@@ -3,1128 +3,1352 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Escrow — Smart Dispute Resolver</title>
+<title>AI Escrow</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Unbounded:wght@300;400;700;900&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg:        #080a0f;
-    --surface:   #0e1118;
-    --border:    #1c2030;
-    --border2:   #252d40;
-    --accent:    #00e5ff;
-    --accent2:   #7b61ff;
-    --warn:      #ff6b35;
-    --green:     #00ff88;
-    --red:       #ff3b5c;
-    --text:      #e8eaf0;
-    --muted:     #5a6380;
-    --mono:      'JetBrains Mono', monospace;
-    --display:   'Syne', sans-serif;
-  }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--display);
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
-
-  /* ── Grid background ── */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
-    background-size: 40px 40px;
-    pointer-events: none;
-    z-index: 0;
-  }
-
-  /* ── Glow orbs ── */
-  .orb {
-    position: fixed;
-    border-radius: 50%;
-    filter: blur(120px);
-    pointer-events: none;
-    z-index: 0;
-  }
-  .orb-1 {
-    width: 500px; height: 500px;
-    background: radial-gradient(circle, rgba(0,229,255,0.06), transparent 70%);
-    top: -100px; left: -100px;
-  }
-  .orb-2 {
-    width: 400px; height: 400px;
-    background: radial-gradient(circle, rgba(123,97,255,0.07), transparent 70%);
-    bottom: 0; right: -50px;
-  }
-
-  /* ── Layout ── */
-  .wrap {
-    position: relative;
-    z-index: 1;
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 0 24px 80px;
-  }
-
-  /* ── Header ── */
-  header {
-    position: relative;
-    z-index: 1;
-    padding: 32px 24px 0;
-    max-width: 900px;
-    margin: 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .logo-icon {
-    width: 32px; height: 32px;
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
-    border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 16px;
-  }
-
-  .badge {
-    font-family: var(--mono);
-    font-size: 10px;
-    padding: 3px 8px;
-    border: 1px solid var(--border2);
-    border-radius: 4px;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-  }
-
-  /* ── Hero ── */
-  .hero {
-    padding: 64px 0 48px;
-    animation: fadeUp 0.7s ease both;
-  }
-
-  .hero-tag {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--accent);
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    margin-bottom: 20px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .hero-tag::before {
-    content: '';
-    width: 24px; height: 1px;
-    background: var(--accent);
-  }
-
-  h1 {
-    font-size: clamp(36px, 6vw, 64px);
-    font-weight: 800;
-    line-height: 1.05;
-    letter-spacing: -0.02em;
-    margin-bottom: 20px;
-  }
-
-  h1 span {
-    background: linear-gradient(90deg, var(--accent), var(--accent2));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-
-  .hero-sub {
-    font-family: var(--mono);
-    font-size: 14px;
-    color: var(--muted);
-    line-height: 1.7;
-    max-width: 560px;
-  }
-
-  /* ── Flow diagram ── */
-  .flow {
-    display: flex;
-    align-items: center;
-    gap: 0;
-    margin: 40px 0;
-    overflow-x: auto;
-    padding-bottom: 8px;
-    animation: fadeUp 0.7s 0.15s ease both;
-  }
-
-  .flow-step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .flow-node {
-    width: 48px; height: 48px;
-    border: 1px solid var(--border2);
-    border-radius: 12px;
-    background: var(--surface);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-
-  .flow-node:hover {
-    border-color: var(--accent);
-    box-shadow: 0 0 20px rgba(0,229,255,0.15);
-  }
-
-  .flow-label {
-    font-family: var(--mono);
-    font-size: 9px;
-    color: var(--muted);
-    text-align: center;
-    letter-spacing: 0.05em;
-    max-width: 60px;
-  }
-
-  .flow-arrow {
-    width: 32px;
-    height: 1px;
-    background: linear-gradient(90deg, var(--border2), var(--accent), var(--border2));
-    flex-shrink: 0;
-    margin-bottom: 20px;
-    position: relative;
-  }
-
-  .flow-arrow::after {
-    content: '▶';
-    position: absolute;
-    right: -6px;
-    top: -7px;
-    font-size: 8px;
-    color: var(--accent);
-  }
-
-  /* ── Section titles ── */
-  .section-title {
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--accent);
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .section-title::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
-
-  /* ── Cards ── */
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 28px;
-    margin-bottom: 16px;
-    transition: border-color 0.2s;
-    animation: fadeUp 0.6s ease both;
-  }
-
-  .card:hover { border-color: var(--border2); }
-
-  /* ── Form elements ── */
-  label {
-    display: block;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 8px;
-  }
-
-  input, textarea, select {
-    width: 100%;
-    background: var(--bg);
-    border: 1px solid var(--border2);
-    border-radius: 10px;
-    padding: 12px 16px;
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: 13px;
-    outline: none;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    margin-bottom: 16px;
-  }
-
-  input:focus, textarea:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(0,229,255,0.08);
-  }
-
-  textarea { resize: vertical; min-height: 100px; }
-
-  .field-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-  }
-
-  @media (max-width: 600px) { .field-row { grid-template-columns: 1fr; } }
-
-  /* ── Buttons ── */
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 13px 24px;
-    border-radius: 10px;
-    font-family: var(--display);
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    cursor: pointer;
-    border: none;
-    transition: all 0.2s;
-    text-transform: uppercase;
-  }
-
-  .btn-primary {
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
-    color: #000;
-  }
-
-  .btn-primary:hover {
-    opacity: 0.9;
-    transform: translateY(-1px);
-    box-shadow: 0 8px 24px rgba(0,229,255,0.25);
-  }
-
-  .btn-primary:active { transform: translateY(0); }
-
-  .btn-outline {
-    background: transparent;
-    border: 1px solid var(--border2);
-    color: var(--text);
-  }
-
-  .btn-outline:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    transform: none !important;
-  }
-
-  /* ── Amount input ── */
-  .amount-wrap {
-    position: relative;
-  }
-
-  .amount-wrap input { padding-right: 60px; }
-
-  .amount-unit {
-    position: absolute;
-    right: 16px;
-    top: 50%;
-    transform: translateY(-60%);
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  /* ── Tabs ── */
-  .tabs {
-    display: flex;
-    gap: 4px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 4px;
-    margin-bottom: 24px;
-  }
-
-  .tab {
-    flex: 1;
-    padding: 10px;
-    border-radius: 8px;
-    border: none;
-    background: transparent;
-    color: var(--muted);
-    font-family: var(--display);
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .tab.active {
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border2);
-  }
-
-  .tab-panel { display: none; }
-  .tab-panel.active { display: block; }
-
-  /* ── Verdict display ── */
-  .verdict-box {
-    border-radius: 16px;
-    padding: 32px;
-    text-align: center;
-    border: 1px solid var(--border2);
-    margin-top: 20px;
-    display: none;
-  }
-
-  .verdict-box.show { display: block; animation: fadeUp 0.5s ease both; }
-
-  .verdict-box.approved { border-color: var(--green); background: rgba(0,255,136,0.04); }
-  .verdict-box.partial  { border-color: var(--warn);  background: rgba(255,107,53,0.04); }
-  .verdict-box.rejected { border-color: var(--red);   background: rgba(255,59,92,0.04); }
-
-  .verdict-emoji { font-size: 48px; margin-bottom: 12px; }
-
-  .verdict-label {
-    font-size: 28px;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    margin-bottom: 8px;
-  }
-
-  .verdict-box.approved .verdict-label { color: var(--green); }
-  .verdict-box.partial  .verdict-label { color: var(--warn); }
-  .verdict-box.rejected .verdict-label { color: var(--red); }
-
-  .verdict-desc {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--muted);
-    margin-bottom: 20px;
-  }
-
-  /* ── Votes row ── */
-  .votes-row {
-    display: flex;
-    gap: 12px;
-    justify-content: center;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-  }
-
-  .vote-chip {
-    font-family: var(--mono);
-    font-size: 11px;
-    padding: 6px 14px;
-    border-radius: 20px;
-    border: 1px solid;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .vote-chip.approved { border-color: var(--green); color: var(--green); background: rgba(0,255,136,0.08); }
-  .vote-chip.partial  { border-color: var(--warn);  color: var(--warn);  background: rgba(255,107,53,0.08); }
-  .vote-chip.rejected { border-color: var(--red);   color: var(--red);   background: rgba(255,59,92,0.08); }
-
-  /* ── Status badge ── */
-  .status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--mono);
-    font-size: 10px;
-    padding: 4px 10px;
-    border-radius: 20px;
-    border: 1px solid var(--border2);
-    color: var(--muted);
-    letter-spacing: 0.08em;
-  }
-
-  .status-pill.pending  { border-color: #ffd60a33; color: #ffd60a; }
-  .status-pill.submitted{ border-color: #5e9cff33; color: #5e9cff; }
-  .status-pill.disputed { border-color: var(--warn); color: var(--warn); }
-  .status-pill.approved { border-color: var(--green); color: var(--green); }
-  .status-pill.rejected { border-color: var(--red); color: var(--red); }
-
-  .pulse {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: currentColor;
-    animation: pulse 1.5s infinite;
-  }
-
-  /* ── Log terminal ── */
-  .terminal {
-    background: #050709;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-    font-family: var(--mono);
-    font-size: 12px;
-    line-height: 1.8;
-    max-height: 200px;
-    overflow-y: auto;
-    margin-top: 16px;
-  }
-
-  .log-line { display: flex; gap: 12px; }
-  .log-time { color: var(--muted); flex-shrink: 0; }
-  .log-info { color: var(--accent); }
-  .log-warn { color: var(--warn); }
-  .log-ok   { color: var(--green); }
-  .log-err  { color: var(--red); }
-
-  /* ── Stats row ── */
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-    margin-bottom: 32px;
-    animation: fadeUp 0.6s 0.1s ease both;
-  }
-
-  .stat-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px;
-    text-align: center;
-  }
-
-  .stat-val {
-    font-size: 28px;
-    font-weight: 800;
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-
-  .stat-key {
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-top: 4px;
-  }
-
-  /* ── Loader ── */
-  .loader {
-    display: inline-block;
-    width: 14px; height: 14px;
-    border: 2px solid rgba(0,229,255,0.2);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-
-  /* ── Agents live ── */
-  .agents {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-    margin: 16px 0;
-  }
-
-  .agent-card {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-    text-align: center;
-    transition: border-color 0.3s;
-  }
-
-  .agent-card.thinking { border-color: var(--accent); box-shadow: 0 0 16px rgba(0,229,255,0.1); }
-  .agent-card.done-approved { border-color: var(--green); }
-  .agent-card.done-partial  { border-color: var(--warn); }
-  .agent-card.done-rejected { border-color: var(--red); }
-
-  .agent-icon { font-size: 24px; margin-bottom: 8px; }
-  .agent-name { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.08em; }
-  .agent-verdict { font-size: 11px; font-weight: 700; margin-top: 6px; letter-spacing: 0.05em; }
-
-  /* ── Animations ── */
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(16px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
-  /* ── Divider ── */
-  .divider { height: 1px; background: var(--border); margin: 32px 0; }
-
-  /* ── Escrow ID display ── */
-  .escrow-id-display {
-    background: var(--bg);
-    border: 1px solid var(--border2);
-    border-radius: 10px;
-    padding: 12px 16px;
-    font-family: var(--mono);
-    font-size: 13px;
-    color: var(--accent);
-    margin-bottom: 16px;
-    display: none;
-  }
-
-  .escrow-id-display.show { display: flex; align-items: center; justify-content: space-between; }
-
-  .copy-btn {
-    background: none;
-    border: none;
-    color: var(--muted);
-    cursor: pointer;
-    font-size: 14px;
-    transition: color 0.2s;
-  }
-
-  .copy-btn:hover { color: var(--accent); }
-
+* { margin:0; padding:0; box-sizing:border-box; }
+
+:root {
+  --black:  #080808;
+  --white:  #f5f5f0;
+  --gray1:  #111111;
+  --gray2:  #1a1a1a;
+  --gray3:  #2a2a2a;
+  --gray4:  #444;
+  --gray5:  #888;
+  --gray6:  #bbb;
+  --border: #222;
+  --mono: 'DM Mono', monospace;
+  --display: 'Unbounded', sans-serif;
+  --green: #d4f5a0;
+  --red:   #ffb0b0;
+  --amber: #ffe0a0;
+  --blue:  #a0d4ff;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--black);
+  color: var(--white);
+  font-family: var(--mono);
+  min-height: 100vh;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ── NOISE TEXTURE ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.4;
+}
+
+/* ── LAYOUT ── */
+.layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+}
+
+/* ── HEADER ── */
+.header {
+  grid-column: 1 / -1;
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 60px;
+}
+
+.logo {
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo-mark {
+  width: 28px; height: 28px;
+  background: var(--white);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.tag {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gray5);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  border-radius: 2px;
+}
+
+.tag.live {
+  border-color: var(--green);
+  color: var(--green);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: blink 1.4s infinite;
+}
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+/* ── SIDEBAR ── */
+.sidebar {
+  border-right: 1px solid var(--border);
+  padding: 28px 0;
+  position: sticky;
+  top: 0;
+  height: calc(100vh - 60px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-section {
+  padding: 0 20px;
+  margin-bottom: 32px;
+}
+
+.sidebar-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--gray4);
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+
+.nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: var(--gray5);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.nav-btn:hover { background: var(--gray2); color: var(--gray6); }
+.nav-btn.active { background: var(--white); color: var(--black); }
+
+.nav-btn .n-icon { font-size: 14px; width: 20px; text-align: center; }
+.nav-btn .n-num {
+  margin-left: auto;
+  font-size: 9px;
+  opacity: 0.4;
+  font-weight: 500;
+}
+
+.sidebar-stats {
+  margin-top: auto;
+  padding: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-row:last-child { border: none; }
+.stat-key { font-size: 10px; color: var(--gray5); }
+.stat-val { font-family: var(--display); font-size: 14px; font-weight: 700; }
+
+/* ── MAIN ── */
+.main {
+  overflow-y: auto;
+  height: calc(100vh - 60px);
+}
+
+.panel {
+  display: none;
+  padding: 40px 48px;
+  animation: fadeIn 0.2s ease;
+}
+
+.panel.active { display: block; }
+
+@keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+/* ── PANEL HEADER ── */
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 40px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-title {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+
+.panel-sub {
+  font-size: 11px;
+  color: var(--gray5);
+  letter-spacing: 0.04em;
+}
+
+.panel-num {
+  font-family: var(--display);
+  font-size: 72px;
+  font-weight: 900;
+  color: var(--gray2);
+  line-height: 1;
+  letter-spacing: -0.04em;
+  user-select: none;
+}
+
+/* ── FORM ── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.form-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.form-grid.cols-1 { grid-template-columns: 1fr; }
+
+.field { display: flex; flex-direction: column; gap: 8px; }
+.field.full { grid-column: 1 / -1; }
+
+.field label {
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--gray4);
+}
+
+.field input,
+.field textarea,
+.field select {
+  background: var(--gray1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px 14px;
+  color: var(--white);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+
+.field input:focus,
+.field textarea:focus {
+  border-color: var(--gray4);
+}
+
+.field textarea { resize: vertical; min-height: 90px; }
+
+.field-hint {
+  font-size: 10px;
+  color: var(--gray4);
+  letter-spacing: 0.04em;
+}
+
+/* ── BUTTON ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: 4px;
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+
+.btn-white {
+  background: var(--white);
+  color: var(--black);
+  border-color: var(--white);
+}
+
+.btn-white:hover { background: var(--gray6); border-color: var(--gray6); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--gray6);
+  border-color: var(--border);
+}
+
+.btn-outline:hover { border-color: var(--gray4); color: var(--white); }
+
+.btn-danger {
+  background: transparent;
+  color: var(--red);
+  border-color: #552020;
+}
+
+.btn-danger:hover { background: #1a0808; }
+
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.btn-row { display: flex; gap: 12px; align-items: center; margin-top: 8px; }
+
+/* ── DIVIDER ── */
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 32px 0;
+}
+
+/* ── RESULT BOX ── */
+.result-box {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 24px;
+  margin-top: 24px;
+  background: var(--gray1);
+  display: none;
+  animation: fadeIn 0.3s ease;
+}
+
+.result-box.show { display: block; }
+
+.result-box.ok    { border-color: #2a4020; background: #0a1208; }
+.result-box.err   { border-color: #402020; background: #120808; }
+.result-box.warn  { border-color: #403010; background: #120e04; }
+
+.result-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--gray4);
+  margin-bottom: 12px;
+}
+
+.result-id {
+  font-family: var(--display);
+  font-size: 48px;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.result-id.ok   { color: var(--green); }
+.result-id.err  { color: var(--red); }
+.result-id.warn { color: var(--amber); }
+
+.result-meta {
+  font-size: 11px;
+  color: var(--gray5);
+}
+
+/* ── VERDICT ── */
+.verdict-wrap {
+  display: none;
+  margin-top: 28px;
+  animation: fadeIn 0.4s ease;
+}
+
+.verdict-wrap.show { display: block; }
+
+.verdict-banner {
+  border-radius: 6px;
+  padding: 32px 36px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  margin-bottom: 16px;
+}
+
+.verdict-banner.approved { background: #0d1a06; border: 1px solid #2a4010; }
+.verdict-banner.partial  { background: #1a1206; border: 1px solid #403010; }
+.verdict-banner.rejected { background: #1a0606; border: 1px solid #401010; }
+
+.verdict-icon { font-size: 40px; flex-shrink: 0; }
+
+.verdict-text-wrap {}
+.verdict-verdict {
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.verdict-banner.approved .verdict-verdict { color: var(--green); }
+.verdict-banner.partial  .verdict-verdict { color: var(--amber); }
+.verdict-banner.rejected .verdict-verdict { color: var(--red); }
+
+.verdict-payout { font-size: 12px; color: var(--gray5); }
+
+.votes-strip {
+  display: flex;
+  gap: 8px;
+}
+
+.vote-pill {
+  flex: 1;
+  padding: 10px 0;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+  border: 1px solid;
+}
+
+.vote-pill.approved { background: #0d1a06; border-color: #2a4010; color: var(--green); }
+.vote-pill.partial  { background: #1a1206; border-color: #403010; color: var(--amber); }
+.vote-pill.rejected { background: #1a0606; border-color: #401010; color: var(--red); }
+
+/* ── STATUS CARD ── */
+.status-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  display: none;
+  margin-top: 24px;
+  animation: fadeIn 0.3s ease;
+}
+
+.status-card.show { display: block; }
+
+.status-card-head {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--gray1);
+}
+
+.status-card-title {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.status-badge {
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: 2px;
+  border: 1px solid;
+  font-weight: 500;
+}
+
+.status-badge.pending   { border-color: #443020; color: var(--amber); background: #1a1008; }
+.status-badge.submitted { border-color: #203040; color: var(--blue); background: #081018; }
+.status-badge.resolved  { border-color: #303030; color: var(--gray6); background: var(--gray1); }
+.status-badge.disputed  { border-color: #443020; color: var(--amber); background: #1a1008; }
+.status-badge.approved  { border-color: #2a4010; color: var(--green); background: #0d1a06; }
+.status-badge.partial   { border-color: #403010; color: var(--amber); background: #1a1206; }
+.status-badge.rejected  { border-color: #401010; color: var(--red); background: #1a0606; }
+.status-badge.claimed   { border-color: #2a4010; color: var(--green); background: #0d1a06; }
+
+.status-card-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+
+.status-field {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.status-field:nth-child(even) { border-right: none; }
+.status-field:nth-last-child(-n+2) { border-bottom: none; }
+
+.status-field-key {
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--gray4);
+  margin-bottom: 6px;
+}
+
+.status-field-val {
+  font-size: 12px;
+  color: var(--gray6);
+  word-break: break-all;
+}
+
+/* ── TERMINAL ── */
+.terminal {
+  background: var(--black);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  font-size: 11px;
+  line-height: 1.9;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-top: 16px;
+  display: none;
+}
+
+.terminal.show { display: block; }
+
+.t-line { display: flex; gap: 12px; }
+.t-time { color: var(--gray4); flex-shrink: 0; width: 60px; }
+.t-info { color: var(--gray5); }
+.t-ok   { color: var(--green); }
+.t-err  { color: var(--red); }
+.t-warn { color: var(--amber); }
+
+/* ── LOADER ── */
+.spin {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 1.5px solid rgba(255,255,255,0.2);
+  border-top-color: var(--white);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── AGENTS ── */
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.agent-tile {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  text-align: center;
+  background: var(--gray1);
+  transition: border-color 0.3s, background 0.3s;
+}
+
+.agent-tile.thinking { border-color: var(--gray4); background: #111; }
+.agent-tile.v-approved { border-color: #2a4010; background: #0d1a06; }
+.agent-tile.v-partial  { border-color: #403010; background: #1a1206; }
+.agent-tile.v-rejected { border-color: #401010; background: #1a0606; }
+
+.agent-num {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--gray3);
+  margin-bottom: 6px;
+}
+
+.agent-tile.thinking .agent-num { color: var(--gray5); }
+
+.agent-result {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--gray4);
+}
+
+.agent-tile.v-approved .agent-result { color: var(--green); }
+.agent-tile.v-partial  .agent-result { color: var(--amber); }
+.agent-tile.v-rejected .agent-result { color: var(--red); }
+
+/* ── INFO ROW ── */
+.info-row {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.info-cell {
+  flex: 1;
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
+}
+
+.info-cell:last-child { border-right: none; }
+.info-key { font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gray4); margin-bottom: 4px; }
+.info-val { font-size: 12px; color: var(--gray6); font-family: var(--mono); }
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--black); }
+::-webkit-scrollbar-thumb { background: var(--gray3); border-radius: 2px; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 768px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .panel { padding: 24px 20px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .agents-grid { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
 
-<div class="orb orb-1"></div>
-<div class="orb orb-2"></div>
+<div class="layout">
 
-<header>
-  <div class="logo">
-    <div class="logo-icon">⚖</div>
-    AI ESCROW
-  </div>
-  <div style="display:flex;gap:8px;align-items:center;">
-    <span class="badge">GENLAYER</span>
-    <span class="badge" id="networkBadge">STUDIONET</span>
-  </div>
-</header>
+  <!-- HEADER -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-mark">⚖</div>
+      AI Escrow
+    </div>
+    <div class="header-right">
+      <span class="tag">GenLayer</span>
+      <span class="tag live"><span class="dot"></span>Studionet</span>
+    </div>
+  </header>
 
-<div class="wrap">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Actions</div>
+      <button class="nav-btn active" onclick="nav('create',this)">
+        <span class="n-icon">＋</span> Create Escrow
+        <span class="n-num">01</span>
+      </button>
+      <button class="nav-btn" onclick="nav('submit',this)">
+        <span class="n-icon">↑</span> Submit Work
+        <span class="n-num">02</span>
+      </button>
+      <button class="nav-btn" onclick="nav('resolve',this)">
+        <span class="n-icon">⚡</span> Resolve
+        <span class="n-num">03</span>
+      </button>
+      <button class="nav-btn" onclick="nav('claim',this)">
+        <span class="n-icon">◎</span> Claim Payment
+        <span class="n-num">04</span>
+      </button>
+    </div>
 
-  <!-- Hero -->
-  <div class="hero">
-    <div class="hero-tag">Powered by 3 LLM Validators</div>
-    <h1>Trustless Freelance<br><span>Smart Dispute</span> Resolution</h1>
-    <p class="hero-sub">
-      Escrow funds released by AI consensus — not humans.<br>
-      Three independent agents evaluate deliverables. Majority rules.
-    </p>
-  </div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Dispute</div>
+      <button class="nav-btn" onclick="nav('dispute',this)">
+        <span class="n-icon">⚠</span> Open Dispute
+        <span class="n-num">05</span>
+      </button>
+      <button class="nav-btn" onclick="nav('reresolve',this)">
+        <span class="n-icon">↺</span> Re-Resolve
+        <span class="n-num">06</span>
+      </button>
+    </div>
 
-  <!-- Flow -->
-  <div class="flow">
-    <div class="flow-step">
-      <div class="flow-node">💼</div>
-      <div class="flow-label">CREATE ESCROW</div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Info</div>
+      <button class="nav-btn" onclick="nav('status',this)">
+        <span class="n-icon">◈</span> Check Status
+        <span class="n-num">07</span>
+      </button>
     </div>
-    <div class="flow-arrow"></div>
-    <div class="flow-step">
-      <div class="flow-node">🛠</div>
-      <div class="flow-label">SUBMIT WORK</div>
-    </div>
-    <div class="flow-arrow"></div>
-    <div class="flow-step">
-      <div class="flow-node">🤖</div>
-      <div class="flow-label">AI ARBITRATION</div>
-    </div>
-    <div class="flow-arrow"></div>
-    <div class="flow-step">
-      <div class="flow-node">⚡</div>
-      <div class="flow-label">CONSENSUS VOTE</div>
-    </div>
-    <div class="flow-arrow"></div>
-    <div class="flow-step">
-      <div class="flow-node">💰</div>
-      <div class="flow-label">FUNDS RELEASED</div>
-    </div>
-  </div>
 
-  <!-- Stats -->
-  <div class="stats">
-    <div class="stat-card">
-      <div class="stat-val" id="statEscrows">0</div>
-      <div class="stat-key">Total Escrows</div>
+    <div class="sidebar-stats">
+      <div class="sidebar-label" style="margin-bottom:8px">Contract</div>
+      <div class="stat-row">
+        <span class="stat-key">Total Escrows</span>
+        <span class="stat-val" id="statTotal">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">Validators</span>
+        <span class="stat-val">3</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">Fee</span>
+        <span class="stat-val">1%</span>
+      </div>
     </div>
-    <div class="stat-card">
-      <div class="stat-val">3</div>
-      <div class="stat-key">AI Validators</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-val">1%</div>
-      <div class="stat-key">Platform Fee</div>
-    </div>
-  </div>
+  </aside>
 
-  <!-- Tabs -->
-  <div class="tabs">
-    <button class="tab active" onclick="switchTab('create')">💼 Create Escrow</button>
-    <button class="tab" onclick="switchTab('submit')">🛠 Submit Work</button>
-    <button class="tab" onclick="switchTab('arbitrate')">⚖ Arbitrate</button>
-    <button class="tab" onclick="switchTab('status')">📊 Check Status</button>
-  </div>
+  <!-- MAIN -->
+  <main class="main">
 
-  <!-- TAB: Create -->
-  <div id="tab-create" class="tab-panel active">
-    <div class="section-title">New Escrow</div>
-    <div class="card">
-      <div class="field-row">
+    <!-- 01 CREATE -->
+    <div id="panel-create" class="panel active">
+      <div class="panel-head">
         <div>
-          <label>Freelancer Address</label>
-          <input type="text" id="freelancerAddr" placeholder="0x...">
+          <div class="panel-title">Create Escrow</div>
+          <div class="panel-sub">Lock funds · Define task · Set dispute window</div>
         </div>
+        <div class="panel-num">01</div>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Freelancer Address</label>
+          <input type="text" id="c_freelancer" placeholder="0x...">
+        </div>
+        <div class="field">
+          <label>Dispute Window (seconds)</label>
+          <input type="number" id="c_window" placeholder="300" min="60">
+          <span class="field-hint">Min 60s · e.g. 300 = 5 min · 86400 = 1 day</span>
+        </div>
+        <div class="field full">
+          <label>Task Description</label>
+          <textarea id="c_task" placeholder="Describe the deliverable precisely. Min 20 chars. The AI validators will use this to evaluate the work."></textarea>
+        </div>
+        <div class="field">
+          <label>Amount (GEN)</label>
+          <input type="number" id="c_amount" placeholder="1.0" min="0.001" step="0.001">
+          <span class="field-hint">Deposited into escrow contract</span>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" onclick="doCreate()">Create Escrow →</button>
+      </div>
+
+      <div class="result-box" id="c_result">
+        <div class="result-label">Escrow Created</div>
+        <div class="result-id ok" id="c_result_id">#0</div>
+        <div class="result-meta" id="c_result_meta"></div>
+      </div>
+
+      <div class="terminal" id="c_log"></div>
+    </div>
+
+    <!-- 02 SUBMIT -->
+    <div id="panel-submit" class="panel">
+      <div class="panel-head">
         <div>
-          <label>Amount (ETH)</label>
-          <div class="amount-wrap">
-            <input type="number" id="escrowAmount" placeholder="1.0" min="0.001" step="0.001">
-            <span class="amount-unit">ETH</span>
+          <div class="panel-title">Submit Work</div>
+          <div class="panel-sub">Freelancer submits deliverable URL · Status → submitted</div>
+        </div>
+        <div class="panel-num">02</div>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="s_id" placeholder="0" min="0">
+        </div>
+        <div class="field">
+          <label>Deliverable URL</label>
+          <input type="text" id="s_url" placeholder="https://github.com/...">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" onclick="doSubmit()">Submit Deliverable →</button>
+      </div>
+
+      <div class="result-box" id="s_result">
+        <div class="result-label">Submitted</div>
+        <div class="result-id ok">OK</div>
+        <div class="result-meta">Status updated to submitted</div>
+      </div>
+
+      <div class="terminal" id="s_log"></div>
+    </div>
+
+    <!-- 03 RESOLVE -->
+    <div id="panel-resolve" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Resolve Escrow</div>
+          <div class="panel-sub">3 LLM validators vote · Funds frozen · Dispute window opens</div>
+        </div>
+        <div class="panel-num">03</div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="r_id" placeholder="0" min="0">
+          <span class="field-hint">Must be submitted status · Only client, freelancer or owner can call</span>
+        </div>
+      </div>
+
+      <div class="agents-grid" id="r_agents" style="display:none">
+        <div class="agent-tile" id="r_a1">
+          <div class="agent-num">01</div>
+          <div class="agent-result" id="r_a1v">WAITING</div>
+        </div>
+        <div class="agent-tile" id="r_a2">
+          <div class="agent-num">02</div>
+          <div class="agent-result" id="r_a2v">WAITING</div>
+        </div>
+        <div class="agent-tile" id="r_a3">
+          <div class="agent-num">03</div>
+          <div class="agent-result" id="r_a3v">WAITING</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" id="r_btn" onclick="doResolve()">Run AI Arbitration →</button>
+      </div>
+
+      <div class="verdict-wrap" id="r_verdict">
+        <div class="verdict-banner" id="r_vbanner">
+          <div class="verdict-icon" id="r_vicon"></div>
+          <div class="verdict-text-wrap">
+            <div class="verdict-verdict" id="r_vlabel"></div>
+            <div class="verdict-payout" id="r_vpayout"></div>
+          </div>
+        </div>
+        <div class="votes-strip" id="r_votes"></div>
+      </div>
+
+      <div class="terminal" id="r_log"></div>
+    </div>
+
+    <!-- 04 CLAIM -->
+    <div id="panel-claim" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Claim Payment</div>
+          <div class="panel-sub">After dispute window expires · No dispute was opened</div>
+        </div>
+        <div class="panel-num">04</div>
+      </div>
+
+      <div class="info-row">
+        <div class="info-cell">
+          <div class="info-key">When to call</div>
+          <div class="info-val">After dispute_window_seconds passes from resolved_at</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Who can call</div>
+          <div class="info-val">Anyone (winner auto-receives funds)</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Required status</div>
+          <div class="info-val">resolved</div>
+        </div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="cl_id" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" onclick="doClaim()">Claim Payment →</button>
+      </div>
+
+      <div class="result-box" id="cl_result">
+        <div class="result-label">Payment Claimed</div>
+        <div class="result-id ok" id="cl_result_verdict">—</div>
+        <div class="result-meta" id="cl_result_meta"></div>
+      </div>
+
+      <div class="terminal" id="cl_log"></div>
+    </div>
+
+    <!-- 05 DISPUTE -->
+    <div id="panel-dispute" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Open Dispute</div>
+          <div class="panel-sub">Client or freelancer disagrees with verdict · Window must be open</div>
+        </div>
+        <div class="panel-num">05</div>
+      </div>
+
+      <div class="info-row">
+        <div class="info-cell">
+          <div class="info-key">Required status</div>
+          <div class="info-val">resolved</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Who can call</div>
+          <div class="info-val">Client or Freelancer only</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Window</div>
+          <div class="info-val">Must be within dispute_window_seconds</div>
+        </div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="d_id" placeholder="0" min="0">
+          <span class="field-hint">Switch wallet to client or freelancer before calling</span>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-danger" onclick="doDispute()">Open Dispute →</button>
+      </div>
+
+      <div class="result-box" id="d_result">
+        <div class="result-label">Dispute Opened</div>
+        <div class="result-id warn">DISPUTED</div>
+        <div class="result-meta">Status updated · Funds remain frozen · Call Re-Resolve next</div>
+      </div>
+
+      <div class="terminal" id="d_log"></div>
+    </div>
+
+    <!-- 06 RE-RESOLVE -->
+    <div id="panel-reresolve" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Re-Resolve</div>
+          <div class="panel-sub">Second LLM arbitration · Final payout executed automatically</div>
+        </div>
+        <div class="panel-num">06</div>
+      </div>
+
+      <div class="info-row">
+        <div class="info-cell">
+          <div class="info-key">Required status</div>
+          <div class="info-val">disputed</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Payout</div>
+          <div class="info-val">Automatic on consensus</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Final?</div>
+          <div class="info-val">Yes — no further appeals</div>
+        </div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="rr_id" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="agents-grid" id="rr_agents" style="display:none">
+        <div class="agent-tile" id="rr_a1">
+          <div class="agent-num">01</div>
+          <div class="agent-result" id="rr_a1v">WAITING</div>
+        </div>
+        <div class="agent-tile" id="rr_a2">
+          <div class="agent-num">02</div>
+          <div class="agent-result" id="rr_a2v">WAITING</div>
+        </div>
+        <div class="agent-tile" id="rr_a3">
+          <div class="agent-num">03</div>
+          <div class="agent-result" id="rr_a3v">WAITING</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" id="rr_btn" onclick="doReresolve()">Run Re-Arbitration →</button>
+      </div>
+
+      <div class="verdict-wrap" id="rr_verdict">
+        <div class="verdict-banner" id="rr_vbanner">
+          <div class="verdict-icon" id="rr_vicon"></div>
+          <div class="verdict-text-wrap">
+            <div class="verdict-verdict" id="rr_vlabel"></div>
+            <div class="verdict-payout" id="rr_vpayout"></div>
+          </div>
+        </div>
+        <div class="votes-strip" id="rr_votes"></div>
+      </div>
+
+      <div class="terminal" id="rr_log"></div>
+    </div>
+
+    <!-- 07 STATUS -->
+    <div id="panel-status" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Check Status</div>
+          <div class="panel-sub">Read escrow state from contract</div>
+        </div>
+        <div class="panel-num">07</div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="st_id" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="doStatus()">Fetch Status</button>
+      </div>
+
+      <div class="status-card" id="st_card">
+        <div class="status-card-head">
+          <div class="status-card-title">Escrow #<span id="st_num">—</span></div>
+          <div class="status-badge" id="st_badge">—</div>
+        </div>
+        <div class="status-card-body">
+          <div class="status-field">
+            <div class="status-field-key">Client</div>
+            <div class="status-field-val" id="st_client">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Freelancer</div>
+            <div class="status-field-val" id="st_freelancer">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Amount (wei)</div>
+            <div class="status-field-val" id="st_amount">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Dispute Window</div>
+            <div class="status-field-val" id="st_window">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Final Verdict</div>
+            <div class="status-field-val" id="st_verdict">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Resolved At</div>
+            <div class="status-field-val" id="st_resolved">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Votes</div>
+            <div class="status-field-val" id="st_votes">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Deliverable URL</div>
+            <div class="status-field-val" id="st_url" style="word-break:break-all">—</div>
           </div>
         </div>
       </div>
-      <label>Task Specification</label>
-      <textarea id="taskSpec" placeholder="Describe the deliverable in detail. Be specific: what must be built, what format, what requirements must be met. The more precise, the better the AI evaluation."></textarea>
-      <button class="btn btn-primary" onclick="createEscrow()">
-        <span>Create Escrow</span> →
-      </button>
+
+      <div class="terminal" id="st_log"></div>
     </div>
 
-    <div class="escrow-id-display" id="newEscrowId">
-      <span>Escrow ID: <strong id="newEscrowIdVal">—</strong></span>
-      <button class="copy-btn" onclick="copyId()" title="Copy ID">⎘</button>
-    </div>
-    <div class="terminal" id="createLog" style="display:none"></div>
-  </div>
-
-  <!-- TAB: Submit -->
-  <div id="tab-submit" class="tab-panel">
-    <div class="section-title">Submit Deliverable</div>
-    <div class="card">
-      <label>Escrow ID</label>
-      <input type="number" id="submitEscrowId" placeholder="0">
-      <label>Deliverable URL</label>
-      <input type="text" id="deliverableUrl" placeholder="https://github.com/user/repo">
-      <button class="btn btn-primary" onclick="submitWork()">
-        <span>Submit Work</span> →
-      </button>
-    </div>
-    <div class="terminal" id="submitLog" style="display:none"></div>
-  </div>
-
-  <!-- TAB: Arbitrate -->
-  <div id="tab-arbitrate" class="tab-panel">
-    <div class="section-title">AI Arbitration</div>
-    <div class="card">
-      <label>Escrow ID</label>
-      <input type="number" id="arbitrateId" placeholder="0">
-      <label>Task Specification</label>
-      <textarea id="arbitrateTaskSpec" placeholder="Describe the task requirements that were agreed upon..."></textarea>
-      <label>Deliverable URL</label>
-      <input type="text" id="arbitrateDeliverableUrl" placeholder="https://github.com/user/repo">
-
-      <div class="agents" id="agentsDisplay" style="display:none">
-        <div class="agent-card" id="agent1">
-          <div class="agent-icon">🔍</div>
-          <div class="agent-name">TECHNICAL<br>COMPLETENESS</div>
-          <div class="agent-verdict" id="a1verdict">—</div>
-        </div>
-        <div class="agent-card" id="agent2">
-          <div class="agent-icon">📋</div>
-          <div class="agent-name">REQUIREMENT<br>COVERAGE</div>
-          <div class="agent-verdict" id="a2verdict">—</div>
-        </div>
-        <div class="agent-card" id="agent3">
-          <div class="agent-icon">⭐</div>
-          <div class="agent-name">QUALITY &<br>PROFESSIONALISM</div>
-          <div class="agent-verdict" id="a3verdict">—</div>
-        </div>
-      </div>
-
-      <button class="btn btn-primary" id="arbitrateBtn" onclick="triggerArbitration()" style="margin-top:8px">
-        <span>Trigger AI Arbitration</span> →
-      </button>
-    </div>
-
-    <div class="verdict-box" id="verdictBox">
-      <div class="verdict-emoji" id="verdictEmoji">—</div>
-      <div class="verdict-label" id="verdictLabel">—</div>
-      <div class="verdict-desc" id="verdictDesc">—</div>
-      <div class="votes-row" id="votesRow"></div>
-      <div id="payoutInfo" style="font-family:var(--mono);font-size:12px;color:var(--muted)"></div>
-    </div>
-    <div class="terminal" id="arbitrateLog" style="display:none"></div>
-  </div>
-
-  <!-- TAB: Status -->
-  <div id="tab-status" class="tab-panel">
-    <div class="section-title">Escrow Status</div>
-    <div class="card">
-      <label>Escrow ID</label>
-      <input type="number" id="statusId" placeholder="0">
-      <button class="btn btn-outline" onclick="checkStatus()">Check Status</button>
-    </div>
-    <div id="statusResult" style="display:none" class="card" style="animation-delay:0.1s">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
-        <span style="font-size:18px;font-weight:700">Escrow #<span id="statusIdDisplay">—</span></span>
-        <span class="status-pill" id="statusPill"><span class="pulse"></span><span id="statusText">—</span></span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div>
-          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px">CLIENT</div>
-          <div style="font-family:var(--mono);font-size:12px;word-break:break-all" id="statusClient">—</div>
-        </div>
-        <div>
-          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px">FREELANCER</div>
-          <div style="font-family:var(--mono);font-size:12px;word-break:break-all" id="statusFreelancer">—</div>
-        </div>
-        <div>
-          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px">AMOUNT</div>
-          <div style="font-family:var(--mono);font-size:12px" id="statusAmount">—</div>
-        </div>
-        <div>
-          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px">VERDICT</div>
-          <div style="font-family:var(--mono);font-size:12px" id="statusVerdict">—</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
+  </main>
 </div>
 
 <script>
-  // ── Config ─────────────────────────────────────────────────────────────────
-  const API_BASE = 'https://ai-escrow-5qt3bpf4e3bv.biosolverr.deno.net';
-  const API = window.location.hostname === 'localhost'
-    ? 'http://localhost:8000'
-    : API_BASE;
+const API_BASE = 'https://ai-escrow-5qt3bpf4e3bv.biosolverr.deno.net';
+const API = window.location.hostname === 'localhost' ? 'http://localhost:8000' : API_BASE;
 
-  // ── Tabs ───────────────────────────────────────────────────────────────────
-  function switchTab(name) {
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.getElementById('tab-' + name).classList.add('active');
-    event.target.classList.add('active');
-  }
+// ── NAV ──────────────────────────────────────────────────────────────────────
+function nav(name, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  btn.classList.add('active');
+}
 
-  // ── Logger ─────────────────────────────────────────────────────────────────
-  function log(terminalId, msg, type = 'info') {
-    const el = document.getElementById(terminalId);
-    el.style.display = 'block';
-    const time = new Date().toLocaleTimeString('en', {hour12:false});
-    const line = document.createElement('div');
-    line.className = 'log-line';
-    line.innerHTML = `<span class="log-time">${time}</span><span class="log-${type}">${msg}</span>`;
-    el.appendChild(line);
-    el.scrollTop = el.scrollHeight;
-  }
+// ── LOG ──────────────────────────────────────────────────────────────────────
+function log(id, msg, type = 'info') {
+  const el = document.getElementById(id);
+  el.classList.add('show');
+  const t = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const line = document.createElement('div');
+  line.className = 't-line';
+  line.innerHTML = `<span class="t-time">${t}</span><span class="t-${type}">${msg}</span>`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
 
-  // ── Simulate demo mode (no real backend yet) ───────────────────────────────
-  // Заглушка — реальные вызовы пойдут через бекенд на Deno
-  const DEMO_MODE = false;
-
-  let escrowCounter = 0;
-  const escrows = {};
-
-  // ── Create Escrow ──────────────────────────────────────────────────────────
-  async function createEscrow() {
-    const freelancer = document.getElementById('freelancerAddr').value.trim();
-    const amount     = document.getElementById('escrowAmount').value;
-    const taskSpec   = document.getElementById('taskSpec').value.trim();
-
-    if (!freelancer || !amount || !taskSpec) {
-      log('createLog', 'ERROR: all fields required', 'err'); return;
-    }
-    if (taskSpec.length < 20) {
-      log('createLog', 'ERROR: task spec too short (min 20 chars)', 'err'); return;
-    }
-
-    log('createLog', 'Sending create_escrow transaction...', 'info');
-
-    if (DEMO_MODE) {
-      await sleep(800);
-      const id = escrowCounter++;
-      escrows[id] = { id, freelancer, amount, taskSpec, status: 'pending', votes: [], verdict: '' };
-      log('createLog', `✓ Escrow #${id} created — ${amount} ETH locked`, 'ok');
-      log('createLog', `Freelancer: ${freelancer.slice(0,10)}...`, 'info');
-      showEscrowId(id);
-      updateStats();
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API}/escrow/create`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ freelancer, amount, task_spec: taskSpec })
-      });
-      const data = await res.json();
-      if (data.escrow_id !== undefined) {
-        log('createLog', `✓ Escrow #${data.escrow_id} created`, 'ok');
-        showEscrowId(data.escrow_id);
-      } else {
-        log('createLog', `ERROR: ${data.error}`, 'err');
-      }
-    } catch(e) {
-      log('createLog', `ERROR: ${e.message}`, 'err');
-    }
-  }
-
-  function showEscrowId(id) {
-    const el = document.getElementById('newEscrowId');
-    document.getElementById('newEscrowIdVal').textContent = id;
-    el.classList.add('show');
-  }
-
-  function copyId() {
-    const id = document.getElementById('newEscrowIdVal').textContent;
-    navigator.clipboard.writeText(id);
-  }
-
-  // ── Submit Work ────────────────────────────────────────────────────────────
-  async function submitWork() {
-    const id  = document.getElementById('submitEscrowId').value;
-    const url = document.getElementById('deliverableUrl').value.trim();
-
-    if (id === '' || !url) { log('submitLog', 'ERROR: fill all fields', 'err'); return; }
-    if (!url.startsWith('http')) { log('submitLog', 'ERROR: URL must start with http', 'err'); return; }
-
-    log('submitLog', `Submitting deliverable for escrow #${id}...`, 'info');
-
-    if (DEMO_MODE) {
-      await sleep(600);
-      if (escrows[id]) {
-        escrows[id].status = 'submitted';
-        escrows[id].url    = url;
-      }
-      log('submitLog', `✓ Work submitted: ${url}`, 'ok');
-      log('submitLog', `Status → SUBMITTED`, 'info');
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API}/escrow/${id}/submit`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ deliverable_url: url })
-      });
-      const data = await res.json();
-      log('submitLog', data.ok ? `✓ ${data.message}` : `ERROR: ${data.error}`, data.ok ? 'ok' : 'err');
-    } catch(e) {
-      log('submitLog', `ERROR: ${e.message}`, 'err');
-    }
-  }
-
-  // ── Arbitration ────────────────────────────────────────────────────────────
-  async function triggerArbitration() {
-    const id      = document.getElementById('arbitrateId').value.trim();
-    const task    = document.getElementById('arbitrateTaskSpec').value.trim();
-    const url     = document.getElementById('arbitrateDeliverableUrl').value.trim();
-
-    if (!url) { log('arbitrateLog', 'ERROR: Deliverable URL is required', 'err'); return; }
-    if (!task) { log('arbitrateLog', 'ERROR: Task specification is required', 'err'); return; }
-
-    const btn = document.getElementById('arbitrateBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="loader"></span> Running 3 AI Agents...';
-
-    document.getElementById('agentsDisplay').style.display = 'grid';
-    document.getElementById('verdictBox').classList.remove('show','approved','partial','rejected');
-
-    // Reset agents to thinking state
-    ['agent1','agent2','agent3'].forEach(a => {
-      document.getElementById(a).className = 'agent-card thinking';
+// ── API CALL ─────────────────────────────────────────────────────────────────
+async function apiCall(endpoint, body, logId) {
+  try {
+    const res = await fetch(`${API}${endpoint}`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
     });
-    ['a1verdict','a2verdict','a3verdict'].forEach(a => {
-      document.getElementById(a).textContent = '...';
-      document.getElementById(a).style.color = 'var(--accent)';
-    });
+    return await res.json();
+  } catch(e) {
+    log(logId, `Connection error: ${e.message}`, 'err');
+    return null;
+  }
+}
 
-    log('arbitrateLog', `Starting AI arbitration for escrow #${id || 'new'}...`, 'info');
-    log('arbitrateLog', 'Sending to 3 independent AI agents...', 'info');
+// ── VERDICT HELPERS ──────────────────────────────────────────────────────────
+const VERDICT_CFG = {
+  approved: { icon:'✓', label:'APPROVED', payout:'Full payment → Freelancer', cls:'approved' },
+  partial:  { icon:'◑', label:'PARTIAL',  payout:'50% Freelancer · 50% Client', cls:'partial' },
+  rejected: { icon:'✕', label:'REJECTED', payout:'Full refund → Client', cls:'rejected' },
+};
 
-    try {
-      const res = await fetch(`${API_BASE}/api/trigger-arbitration`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          escrow_id: parseInt(id) || 1,
-          task_description: task,
-          deliverable_url: url
-        })
-      });
+function renderVerdict(prefix, verdict, votes) {
+  const cfg = VERDICT_CFG[verdict] || VERDICT_CFG.partial;
+  const wrap = document.getElementById(prefix + '_verdict');
+  const banner = document.getElementById(prefix + '_vbanner');
+  banner.className = `verdict-banner ${cfg.cls}`;
+  document.getElementById(prefix + '_vicon').textContent = cfg.icon;
+  document.getElementById(prefix + '_vlabel').textContent = cfg.label;
+  document.getElementById(prefix + '_vpayout').textContent = cfg.payout;
+  const vRow = document.getElementById(prefix + '_votes');
+  vRow.innerHTML = (votes || []).map((v,i) =>
+    `<div class="vote-pill ${v}">Agent ${i+1}: ${v.toUpperCase()}</div>`
+  ).join('');
+  wrap.classList.add('show');
+}
 
-      const data = await res.json();
+function renderAgentThinking(prefix) {
+  for (let i = 1; i <= 3; i++) {
+    document.getElementById(`${prefix}_a${i}`).className = 'agent-tile thinking';
+    document.getElementById(`${prefix}_a${i}v`).textContent = '...';
+  }
+}
 
-      if (data.success) {
-        const votes = data.votes || [];
-        ['agent1','agent2','agent3'].forEach((el, i) => {
-          const verdict = votes[i] || 'partial';
-          setAgentResult(el, `a${i+1}verdict`, verdict);
-          log('arbitrateLog', `Agent ${i+1} → ${verdict.toUpperCase()}`,
-            verdict === 'approved' ? 'ok' : verdict === 'rejected' ? 'err' : 'warn');
-        });
+function renderAgentResult(prefix, votes) {
+  for (let i = 0; i < 3; i++) {
+    const v = votes[i] || 'partial';
+    document.getElementById(`${prefix}_a${i+1}`).className = `agent-tile v-${v}`;
+    document.getElementById(`${prefix}_a${i+1}v`).textContent = v.toUpperCase();
+  }
+}
 
-        showVerdict(data.final_verdict, votes, id);
-        log('arbitrateLog', `Final Verdict: ${data.final_verdict.toUpperCase()}`, 'ok');
-        if (data.processing_time_ms) {
-          log('arbitrateLog', `Processing time: ${data.processing_time_ms}ms`, 'info');
-        }
-      } else {
-        log('arbitrateLog', `ERROR: ${data.error || 'Unknown error'}`, 'err');
-        ['agent1','agent2','agent3'].forEach(a => {
-          document.getElementById(a).className = 'agent-card';
-        });
-      }
-    } catch(e) {
-      log('arbitrateLog', `Connection error: ${e.message}`, 'err');
-      ['agent1','agent2','agent3'].forEach(a => {
-        document.getElementById(a).className = 'agent-card';
-      });
+// ── 01 CREATE ─────────────────────────────────────────────────────────────────
+async function doCreate() {
+  const freelancer = document.getElementById('c_freelancer').value.trim();
+  const window_s   = document.getElementById('c_window').value;
+  const task       = document.getElementById('c_task').value.trim();
+  const amount     = document.getElementById('c_amount').value;
+
+  if (!freelancer || !window_s || !task || !amount) {
+    log('c_log', 'All fields required', 'err'); return;
+  }
+  if (task.length < 20) { log('c_log', 'Task too short (min 20 chars)', 'err'); return; }
+  if (parseInt(window_s) < 60) { log('c_log', 'Dispute window min 60 seconds', 'err'); return; }
+
+  log('c_log', 'Sending create_escrow...', 'info');
+
+  const data = await apiCall('/escrow/create', {
+    freelancer, amount, task_spec: task, dispute_window_seconds: parseInt(window_s)
+  }, 'c_log');
+
+  if (data?.escrow_id !== undefined) {
+    log('c_log', `Escrow #${data.escrow_id} created · ${amount} GEN locked`, 'ok');
+    log('c_log', `Dispute window: ${window_s}s`, 'info');
+    const box = document.getElementById('c_result');
+    document.getElementById('c_result_id').textContent = '#' + data.escrow_id;
+    document.getElementById('c_result_meta').textContent = `${amount} GEN · Window: ${window_s}s · ${freelancer.slice(0,14)}...`;
+    box.classList.add('show');
+    fetchStats();
+  } else if (data?.error) {
+    log('c_log', `Error: ${data.error}`, 'err');
+  }
+}
+
+// ── 02 SUBMIT ─────────────────────────────────────────────────────────────────
+async function doSubmit() {
+  const id  = document.getElementById('s_id').value;
+  const url = document.getElementById('s_url').value.trim();
+  if (id === '' || !url) { log('s_log', 'All fields required', 'err'); return; }
+
+  log('s_log', `Submitting deliverable for escrow #${id}...`, 'info');
+
+  const data = await apiCall(`/escrow/${id}/submit`, { deliverable_url: url }, 's_log');
+
+  if (data?.ok) {
+    log('s_log', 'Deliverable submitted · Status → submitted', 'ok');
+    document.getElementById('s_result').classList.add('show');
+  } else {
+    log('s_log', `Error: ${data?.error || 'unknown'}`, 'err');
+  }
+}
+
+// ── 03 RESOLVE ────────────────────────────────────────────────────────────────
+async function doResolve() {
+  const id = document.getElementById('r_id').value;
+  if (id === '') { log('r_log', 'Escrow ID required', 'err'); return; }
+
+  const btn = document.getElementById('r_btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Running validators...';
+
+  document.getElementById('r_agents').style.display = 'grid';
+  document.getElementById('r_verdict').classList.remove('show');
+  renderAgentThinking('r');
+
+  log('r_log', `resolve_escrow(${id}) · 3 LLM validators...`, 'info');
+
+  const data = await apiCall(`/escrow/${id}/resolve`, {}, 'r_log');
+
+  if (data?.ok) {
+    const votes = data.votes || [];
+    renderAgentResult('r', votes);
+    votes.forEach((v,i) => log('r_log', `Validator ${i+1} → ${v.toUpperCase()}`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
+    log('r_log', `Verdict: ${data.final_verdict?.toUpperCase()} · Funds frozen · Dispute window open`, 'ok');
+    renderVerdict('r', data.final_verdict, votes);
+  } else {
+    log('r_log', `Error: ${data?.error || 'unknown'}`, 'err');
+    document.getElementById('r_agents').style.display = 'none';
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = 'Run AI Arbitration →';
+}
+
+// ── 04 CLAIM ─────────────────────────────────────────────────────────────────
+async function doClaim() {
+  const id = document.getElementById('cl_id').value;
+  if (id === '') { log('cl_log', 'Escrow ID required', 'err'); return; }
+
+  log('cl_log', `claim_payment(${id})...`, 'info');
+
+  const data = await apiCall(`/escrow/${id}/claim`, {}, 'cl_log');
+
+  if (data?.ok) {
+    log('cl_log', `Payment claimed · Verdict: ${data.verdict?.toUpperCase()}`, 'ok');
+    const box = document.getElementById('cl_result');
+    document.getElementById('cl_result_verdict').textContent = data.verdict?.toUpperCase() || 'OK';
+    document.getElementById('cl_result_meta').textContent = VERDICT_CFG[data.verdict]?.payout || '';
+    box.classList.add('show');
+  } else {
+    log('cl_log', `Error: ${data?.error || 'unknown'}`, 'err');
+  }
+}
+
+// ── 05 DISPUTE ────────────────────────────────────────────────────────────────
+async function doDispute() {
+  const id = document.getElementById('d_id').value;
+  if (id === '') { log('d_log', 'Escrow ID required', 'err'); return; }
+
+  log('d_log', `dispute_escrow(${id})...`, 'warn');
+
+  const data = await apiCall(`/escrow/${id}/dispute`, {}, 'd_log');
+
+  if (data?.ok) {
+    log('d_log', 'Dispute opened · Status → disputed · Funds frozen', 'ok');
+    document.getElementById('d_result').classList.add('show');
+  } else {
+    log('d_log', `Error: ${data?.error || 'unknown'}`, 'err');
+  }
+}
+
+// ── 06 RE-RESOLVE ─────────────────────────────────────────────────────────────
+async function doReresolve() {
+  const id = document.getElementById('rr_id').value;
+  if (id === '') { log('rr_log', 'Escrow ID required', 'err'); return; }
+
+  const btn = document.getElementById('rr_btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Re-arbitrating...';
+
+  document.getElementById('rr_agents').style.display = 'grid';
+  document.getElementById('rr_verdict').classList.remove('show');
+  renderAgentThinking('rr');
+
+  log('rr_log', `re_resolve_escrow(${id}) · Final arbitration...`, 'warn');
+
+  const data = await apiCall(`/escrow/${id}/re-resolve`, {}, 'rr_log');
+
+  if (data?.ok) {
+    const votes = data.votes || [];
+    renderAgentResult('rr', votes);
+    votes.forEach((v,i) => log('rr_log', `Validator ${i+1} → ${v.toUpperCase()}`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
+    log('rr_log', `Final verdict: ${data.final_verdict?.toUpperCase()} · Payout executed`, 'ok');
+    renderVerdict('rr', data.final_verdict, votes);
+  } else {
+    log('rr_log', `Error: ${data?.error || 'unknown'}`, 'err');
+    document.getElementById('rr_agents').style.display = 'none';
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = 'Run Re-Arbitration →';
+}
+
+// ── 07 STATUS ─────────────────────────────────────────────────────────────────
+async function doStatus() {
+  const id = document.getElementById('st_id').value;
+  if (id === '') return;
+
+  log('st_log', `get_escrow(${id})...`, 'info');
+
+  try {
+    const res = await fetch(`${API}/escrow/${id}`);
+    const data = await res.json();
+
+    if (data.status) {
+      document.getElementById('st_num').textContent = id;
+      document.getElementById('st_client').textContent    = data.client || '—';
+      document.getElementById('st_freelancer').textContent = data.freelancer || '—';
+      document.getElementById('st_amount').textContent   = data.amount_wei || '—';
+      document.getElementById('st_window').textContent   = (data.dispute_window_seconds || '—') + 's';
+      document.getElementById('st_verdict').textContent  = data.final_verdict || '—';
+      document.getElementById('st_votes').textContent    = (data.votes || []).join(', ') || '—';
+      document.getElementById('st_url').textContent      = data.deliverable_url || '—';
+
+      const ts = data.resolved_at;
+      document.getElementById('st_resolved').textContent = ts && ts > 0
+        ? new Date(ts * 1000).toLocaleString()
+        : '—';
+
+      const badge = document.getElementById('st_badge');
+      badge.textContent = (data.status || '—').toUpperCase();
+      badge.className = `status-badge ${data.status || ''}`;
+
+      document.getElementById('st_card').classList.add('show');
+      log('st_log', `Status: ${data.status?.toUpperCase()}`, 'ok');
+    } else {
+      log('st_log', 'Escrow not found', 'err');
     }
-
-    btn.disabled = false;
-    btn.innerHTML = '<span>Trigger AI Arbitration</span> →';
+  } catch(e) {
+    log('st_log', `Error: ${e.message}`, 'err');
   }
+}
 
-  function simulateVerdicts() {
-    const opts = ['approved','approved','rejected','partial'];
-    return [
-      opts[Math.floor(Math.random() * opts.length)],
-      opts[Math.floor(Math.random() * opts.length)],
-      opts[Math.floor(Math.random() * opts.length)],
-    ];
-  }
-
-  function majorityVote(votes) {
-    const c = {approved:0, partial:0, rejected:0};
-    votes.forEach(v => { if (c[v] !== undefined) c[v]++; });
-    const max = Math.max(...Object.values(c));
-    for (const [k,v] of Object.entries(c)) {
-      if (v === max && max >= 2) return k;
+// ── STATS ──────────────────────────────────────────────────────────────────
+async function fetchStats() {
+  try {
+    const res = await fetch(`${API}/stats`);
+    const data = await res.json();
+    if (data.total_escrows !== undefined) {
+      document.getElementById('statTotal').textContent = data.total_escrows;
     }
-    return 'partial';
-  }
+  } catch {}
+}
 
-  function setAgentResult(cardId, verdictId, verdict) {
-    const card = document.getElementById(cardId);
-    const vEl  = document.getElementById(verdictId);
-    card.className = `agent-card done-${verdict}`;
-    vEl.textContent = verdict.toUpperCase();
-    vEl.style.color = verdict === 'approved' ? 'var(--green)' : verdict === 'rejected' ? 'var(--red)' : 'var(--warn)';
-  }
-
-  function showVerdict(verdict, votes, id) {
-    const box = document.getElementById('verdictBox');
-    const configs = {
-      approved: { emoji:'✅', label:'APPROVED', desc:'Full payment released to freelancer.' },
-      partial:  { emoji:'⚡', label:'PARTIAL',  desc:'50% to freelancer · 50% refunded to client.' },
-      rejected: { emoji:'❌', label:'REJECTED', desc:'Full refund to client.' },
-    };
-    const cfg = configs[verdict] || configs.partial;
-
-    document.getElementById('verdictEmoji').textContent = cfg.emoji;
-    document.getElementById('verdictLabel').textContent = cfg.label;
-    document.getElementById('verdictDesc').textContent  = cfg.desc;
-
-    const vRow = document.getElementById('votesRow');
-    vRow.innerHTML = votes.map((v,i) =>
-      `<span class="vote-chip ${v}">Agent ${i+1}: ${v.toUpperCase()}</span>`
-    ).join('');
-
-    box.className = `verdict-box show ${verdict}`;
-
-    if (escrows[id]) { escrows[id].status = verdict; escrows[id].votes = votes; escrows[id].verdict = verdict; }
-  }
-
-  // ── Check Status ───────────────────────────────────────────────────────────
-  async function checkStatus() {
-    const id = document.getElementById('statusId').value;
-    if (id === '') return;
-
-    if (DEMO_MODE && escrows[id]) {
-      const e = escrows[id];
-      renderStatus(id, e.status, '0xClient...', e.freelancer, e.amount + ' ETH', e.verdict || '—');
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API}/escrow/${id}`);
-      const data = await res.json();
-      if (data.status) {
-        renderStatus(id, data.status, data.client, data.freelancer, data.amount_eth + ' ETH', data.final_verdict || '—');
-      }
-    } catch(e) {
-      if (DEMO_MODE) renderStatus(id, 'pending', '0xClient...', '0xFreelancer...', '1.0 ETH', '—');
-    }
-  }
-
-  function renderStatus(id, status, client, freelancer, amount, verdict) {
-    document.getElementById('statusIdDisplay').textContent = id;
-    document.getElementById('statusClient').textContent    = client;
-    document.getElementById('statusFreelancer').textContent= freelancer;
-    document.getElementById('statusAmount').textContent    = amount;
-    document.getElementById('statusVerdict').textContent   = verdict;
-
-    const pill = document.getElementById('statusPill');
-    pill.className = `status-pill ${status}`;
-    document.getElementById('statusText').textContent = status.toUpperCase();
-
-    document.getElementById('statusResult').style.display = 'block';
-  }
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  function updateStats() {
-    document.getElementById('statEscrows').textContent = escrowCounter;
-  }
-
-  // ── Init ───────────────────────────────────────────────────────────────────
-  // Ping backend
-  (async () => {
-    if (!DEMO_MODE) {
-      try {
-        const r = await fetch(`${API}/health`);
-        const d = await r.json();
-        document.getElementById('networkBadge').textContent = d.network || 'CONNECTED';
-      } catch {}
-    }
-  })();
+fetchStats();
 </script>
 </body>
 </html>
