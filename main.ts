@@ -1,17 +1,10 @@
-// ── AI Escrow v3 — Strict Contract Compliance ─────────────────────────────
-// Deno Deploy compatible single-file app
-// Matches ai_escrow.py logic exactly:
-// - create_escrow(client, freelancer, task_description, amount)
-// - submit_work(escrow_id, deliverable_url)  [freelancer only, PENDING status]
-// - trigger_arbitration(escrow_id)           [either party, SUBMITTED status]
-// - get_escrow / get_verdict / get_total_escrows
-// - withdraw_fees / update_platform_fee      [owner only]
-//
-// LOGIC FLOW: PENDING → SUBMITTED → DISPUTED → [APPROVED | PARTIAL | REJECTED]
+// ── AI Escrow — main.ts ──────────────────────────────────────────────────────
+// Deno Deploy · Matches ai_escrow.py v3 contract exactly
+// Methods: create_escrow · submit_deliverable · resolve_escrow
+//          claim_payment · dispute_escrow · re_resolve_escrow
 
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
 const LLM_MODEL = Deno.env.get("LLM_PROVIDER") ?? "llama-3.1-8b-instant";
-const OWNER = Deno.env.get("OWNER_ADDRESS") ?? "web";  // default owner
 
 interface Escrow {
   id: number;
@@ -20,19 +13,17 @@ interface Escrow {
   amount_eth: string;
   task_description: string;
   deliverable_url: string;
-  status: "pending" | "submitted" | "disputed" | "approved" | "partial" | "rejected";
+  status: string;
   votes: string[];
   final_verdict: string;
-  created_at: number;   // timestamp ms
-  resolved_at: number;  // timestamp ms (0 if not resolved)
+  created_at: number;
+  resolved_at: number;
+  dispute_window_seconds: number;
 }
 
 const kv = await Deno.openKv();
-console.info("KV initialized");
 
-// ─────────────────────────────────────────────
-// Utils
-// ─────────────────────────────────────────────
+// ── Utils ────────────────────────────────────────────────────────────────────
 
 function cors(headers: HeadersInit = {}): Headers {
   const h = new Headers(headers);
@@ -43,33 +34,13 @@ function cors(headers: HeadersInit = {}): Headers {
 }
 
 function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), { status, headers: cors({ "Content-Type": "application/json" }) });
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: cors({ "Content-Type": "application/json" }),
+  });
 }
 
-// Sequential logs — max 500 entries, no spam
-async function addLog(action: string, data: Record<string, unknown>) {
-  const key = ["audit_log"];
-  const res = await kv.get<string[]>(key);
-  let logs = res.value ?? [];
-  // Explicit serialization to ensure all data is captured
-  const entry = {
-    t: Date.now(),
-    action,
-    data: JSON.parse(JSON.stringify(data)) // force deep serialization
-  };
-  logs.push(JSON.stringify(entry));
-  if (logs.length > 500) logs = logs.slice(-500);
-  await kv.set(key, logs);
-}
-
-async function getLogs(): Promise<string[]> {
-  const res = await kv.get<string[]>(["audit_log"]);
-  return res.value ?? [];
-}
-
-// ─────────────────────────────────────────────
-// Storage
-// ─────────────────────────────────────────────
+// ── Storage ──────────────────────────────────────────────────────────────────
 
 async function nextId(): Promise<number> {
   await kv.atomic().mutate({ type: "sum", key: ["counter"], value: 1n }).commit();
@@ -94,58 +65,41 @@ async function getAllEscrows(): Promise<Escrow[]> {
   return out.sort((a, b) => b.id - a.id);
 }
 
-async function getTotalEscrows(): Promise<number> {
-  const res = await kv.get<bigint>(["counter"]);
-  return Number(res.value ?? 0n);
-}
+// ── LLM Validators ───────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────
-// AI Validators (exactly as contract)
-// ─────────────────────────────────────────────
+async function callValidator(
+  taskSpec: string,
+  deliverableUrl: string,
+  isDispute = false,
+): Promise<string> {
+  const disputeNote = isDispute ? "This is a DISPUTED case — evaluate carefully.\n" : "";
+  const prompt = `You are an impartial arbitrator evaluating a freelance deliverable.
 
-async function callValidator(role: string, taskSpec: string, deliverableUrl: string): Promise<string> {
-  const prompts: Record<string, string> = {
-    tech: `You are a strict technical evaluator for a freelance escrow system.
-
-TASK SPECIFICATION:
+TASK DESCRIPTION:
 ${taskSpec}
 
-DELIVERABLE URL: ${deliverableUrl}
+DELIVERABLE URL:
+${deliverableUrl}
 
-Evaluate whether the deliverable is TECHNICALLY COMPLETE relative to the task specification.
-Consider: Does the URL resolve to real content? Are technical requirements present? Is there evidence of actual implementation vs placeholder?
+${disputeNote}Respond with exactly one word: APPROVED, PARTIAL, or REJECTED.
+- APPROVED: deliverable fully meets requirements
+- PARTIAL: deliverable partially meets requirements
+- REJECTED: deliverable clearly does not meet requirements
 
-Respond with EXACTLY one word: APPROVED | PARTIAL | REJECTED`,
-
-    req: `You are a meticulous requirements analyst for a freelance escrow system.
-
-TASK SPECIFICATION:
-${taskSpec}
-
-DELIVERABLE URL: ${deliverableUrl}
-
-Extract all explicit requirements from the task spec, then check whether each is addressed in the deliverable.
-Score: APPROVED (85%+ met) | PARTIAL (40-84% met) | REJECTED (<40% met)
-
-Your final line must be EXACTLY one word: APPROVED | PARTIAL | REJECTED`,
-
-    quality: `You are a quality assurance expert evaluating freelance work for escrow release.
-
-TASK SPECIFICATION:
-${taskSpec}
-
-DELIVERABLE URL: ${deliverableUrl}
-
-Evaluate QUALITY and PROFESSIONALISM: Is the work original and non-trivial? Does it meet professional standards? Any red flags (empty repo, placeholder content, boilerplate)?
-
-Your final answer must be EXACTLY one word: APPROVED | PARTIAL | REJECTED`,
-  };
+Your verdict:`;
 
   try {
     const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_API_KEY}` },
-      body: JSON.stringify({ model: LLM_MODEL, messages: [{ role: "user", content: prompts[role] ?? prompts.tech }], max_tokens: 20 }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 10,
+      }),
     });
     const d = await r.json();
     const text = (d?.choices?.[0]?.message?.content ?? "").toUpperCase();
@@ -164,676 +118,1560 @@ function majorityVote(votes: string[]): string {
   if (max >= 2) {
     return Object.entries(c).find(([, v]) => v === max)?.[0] ?? "partial";
   }
-  return "partial";  // 3-way tie → safest neutral
+  return "partial";
 }
 
-// ─────────────────────────────────────────────
-// Frontend v3 — Full Contract UI, Clean Design
-// ─────────────────────────────────────────────
+async function runArbitration(e: Escrow, isDispute = false): Promise<{ votes: string[]; verdict: string }> {
+  const [v1, v2, v3] = await Promise.all([
+    callValidator(e.task_description, e.deliverable_url, isDispute),
+    callValidator(e.task_description, e.deliverable_url, isDispute),
+    callValidator(e.task_description, e.deliverable_url, isDispute),
+  ]);
+  const votes = [v1, v2, v3];
+  return { votes, verdict: majorityVote(votes) };
+}
 
-function frontendHTML() {
+// ── Frontend ─────────────────────────────────────────────────────────────────
+
+function frontendHTML(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>AI Escrow — Trustless Freelance Payments</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Escrow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Unbounded:wght@300;400;700;900&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0a0a0f;--card:#12121a;--border:#1e1e2e;--accent:#ff6a00;--text:#e0e0e0;--muted:#888;--green:#2ecc71;--yellow:#f1c40f;--red:#e74c3c;--blue:#3498db;--purple:#9b59b6}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;line-height:1.5;min-height:100vh;padding-bottom:200px}
+* { margin:0; padding:0; box-sizing:border-box; }
 
-/* Header */
-.header{background:var(--card);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
-.header-left{display:flex;align-items:center;gap:12px}
-.header h1{font-size:20px;font-weight:700;color:var(--accent);letter-spacing:-0.5px}
-.header .subtitle{font-size:12px;color:var(--muted)}
-.header .stats{display:flex;gap:16px;font-size:13px}
-.header .stats span{color:var(--muted)}
-.header .stats b{color:var(--text)}
+:root {
+  --black:  #080808;
+  --white:  #f5f5f0;
+  --gray1:  #111111;
+  --gray2:  #1a1a1a;
+  --gray3:  #2a2a2a;
+  --gray4:  #444;
+  --gray5:  #888;
+  --gray6:  #bbb;
+  --border: #222;
+  --mono: 'DM Mono', monospace;
+  --display: 'Unbounded', sans-serif;
+  --green: #d4f5a0;
+  --red:   #ffb0b0;
+  --amber: #ffe0a0;
+  --blue:  #a0d4ff;
+}
 
-/* Layout */
-.container{max-width:1400px;margin:0 auto;padding:20px}
-.grid{display:grid;grid-template-columns:320px 1fr;gap:20px}
-@media(max-width:900px){.grid{grid-template-columns:1fr}}
+html { scroll-behavior: smooth; }
 
-/* Sidebar — Actions */
-.sidebar{display:flex;flex-direction:column;gap:16px}
-.panel{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
-.panel h3{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:12px;display:flex;align-items:center;gap:6px}
-.panel h3::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+body {
+  background: var(--black);
+  color: var(--white);
+  font-family: var(--mono);
+  min-height: 100vh;
+  font-size: 13px;
+  line-height: 1.6;
+}
 
-input,textarea,select{width:100%;background:#0a0a12;border:1px solid var(--border);color:var(--text);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:10px;transition:border-color .2s}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
-textarea{min-height:80px;resize:vertical;font-family:inherit}
-input::placeholder,textarea::placeholder{color:#444}
+/* ── NOISE TEXTURE ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.4;
+}
 
-.btn{width:100%;background:var(--accent);color:#000;border:none;padding:12px;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;transition:filter .2s}
-.btn:hover{filter:brightness(1.1)}
-.btn:disabled{opacity:.4;cursor:not-allowed}
-.btn.secondary{background:var(--border);color:var(--text)}
-.btn.secondary:hover{background:#2a2a3e}
-.btn.small{width:auto;padding:6px 12px;font-size:12px}
+/* ── LAYOUT ── */
+.layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+}
 
-.hint{font-size:11px;color:var(--muted);margin-top:6px}
-.error{color:var(--red);font-size:12px;margin-top:6px}
-.success{color:var(--green);font-size:12px;margin-top:6px}
+/* ── HEADER ── */
+.header {
+  grid-column: 1 / -1;
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 60px;
+}
 
-/* Flow diagram */
-.flow{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:12px;flex-wrap:wrap}
-.flow .step{padding:4px 10px;border-radius:6px;background:#0a0a12;border:1px solid var(--border)}
-.flow .step.active{background:rgba(255,106,0,.15);border-color:var(--accent);color:var(--accent);font-weight:600}
-.flow .arrow{color:var(--muted)}
+.logo {
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 
-/* Main content */
-.main{display:flex;flex-direction:column;gap:16px}
+.logo-mark {
+  width: 28px; height: 28px;
+  background: var(--white);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+}
 
-/* Status badges */
-.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
-.badge::before{content:"";width:6px;height:6px;border-radius:50%}
-.badge-pending{background:rgba(136,136,136,.15);color:var(--muted)}
-.badge-pending::before{background:var(--muted)}
-.badge-submitted{background:rgba(52,152,219,.15);color:var(--blue)}
-.badge-submitted::before{background:var(--blue)}
-.badge-disputed{background:rgba(155,89,182,.15);color:var(--purple)}
-.badge-disputed::before{background:var(--purple)}
-.badge-approved{background:rgba(46,204,113,.15);color:var(--green)}
-.badge-approved::before{background:var(--green)}
-.badge-partial{background:rgba(241,196,15,.15);color:var(--yellow)}
-.badge-partial::before{background:var(--yellow)}
-.badge-rejected{background:rgba(231,76,60,.15);color:var(--red)}
-.badge-rejected::before{background:var(--red)}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
 
-/* Vote pills */
-.vote-pill{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;text-transform:uppercase}
-.vote-pill::before{content:"";width:5px;height:5px;border-radius:50%}
-.vote-approved{background:rgba(46,204,113,.15);color:var(--green)}
-.vote-approved::before{background:var(--green)}
-.vote-partial{background:rgba(241,196,15,.15);color:var(--yellow)}
-.vote-partial::before{background:var(--yellow)}
-.vote-rejected{background:rgba(231,76,60,.15);color:var(--red)}
-.vote-rejected::before{background:var(--red)}
+.tag {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gray5);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  border-radius: 2px;
+}
 
-/* Escrow list */
-.list-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.list-header h2{font-size:16px;font-weight:600}
-.filter{display:flex;gap:8px}
-.filter select{width:auto;padding:6px 10px;font-size:12px}
+.tag.live {
+  border-color: var(--green);
+  color: var(--green);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
-.escrow-list{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-.escrow-item{padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;display:grid;grid-template-columns:50px 1fr auto;gap:12px;align-items:center}
-.escrow-item:hover{background:#1a1a28}
-.escrow-item:last-child{border-bottom:none}
-.escrow-item .id{font-weight:800;color:var(--accent);font-size:14px}
-.escrow-item .info{min-width:0}
-.escrow-item .meta{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.escrow-item .meta strong{color:var(--text)}
-.escrow-item .task-preview{font-size:12px;color:#666;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.escrow-item .side{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
-.escrow-item .amount{font-size:13px;font-weight:700;color:var(--text)}
-.escrow-item .date{font-size:11px;color:#444}
+.dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: blink 1.4s infinite;
+}
 
-/* Detail view */
-.detail{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
-.detail h2{font-size:18px;margin-bottom:16px;display:flex;align-items:center;gap:10px}
-.detail-grid{display:grid;grid-template-columns:140px 1fr;gap:1px;background:var(--border);border-radius:8px;overflow:hidden}
-.detail-grid > div{padding:10px 14px;background:var(--card);font-size:13px}
-.detail-grid .label{color:var(--muted);font-weight:500}
-.detail-grid .value{color:var(--text);word-break:break-word}
-.detail-grid .value a{color:var(--blue);text-decoration:none}
-.detail-grid .value a:hover{text-decoration:underline}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
 
-.detail-section{margin-top:16px}
-.detail-section h4{font-size:12px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;margin-bottom:8px}
+/* ── SIDEBAR ── */
+.sidebar {
+  border-right: 1px solid var(--border);
+  padding: 28px 0;
+  position: sticky;
+  top: 0;
+  height: calc(100vh - 60px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
 
-.votes-row{display:flex;gap:10px;margin-top:8px}
-.verdict-box{margin-top:12px;padding:12px;border-radius:8px;background:rgba(255,106,0,.08);border:1px solid rgba(255,106,0,.2);display:flex;align-items:center;gap:12px}
-.verdict-box .label{font-size:12px;color:var(--muted)}
-.verdict-box .value{font-size:16px;font-weight:800}
+.sidebar-section {
+  padding: 0 20px;
+  margin-bottom: 32px;
+}
 
-/* Empty state */
-.empty{text-align:center;padding:40px;color:var(--muted);font-size:14px}
-.empty-icon{font-size:32px;margin-bottom:8px;opacity:.5}
+.sidebar-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--gray4);
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
 
-/* Logs panel */
-.logs-panel{position:fixed;bottom:0;left:0;right:0;height:180px;background:#050508;border-top:1px solid var(--border);display:flex;flex-direction:column;z-index:90}
-.logs-header{padding:8px 16px;background:var(--card);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted)}
-.logs-header b{color:var(--text)}
-.logs-content{flex:1;overflow-y:auto;padding:8px 16px;font-family:'SF Mono',monospace;font-size:11px;line-height:1.6}
-.logs-content .entry{display:flex;gap:10px;padding:2px 0;border-bottom:1px solid #0a0a12}
-.logs-content .time{color:var(--accent);white-space:nowrap;opacity:.8}
-.logs-content .action{color:var(--blue);font-weight:600;white-space:nowrap}
-.logs-content .data{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: var(--gray5);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
 
-/* Toast */
-.toast{position:fixed;top:20px;right:20px;background:var(--card);border:1px solid var(--border);padding:14px 18px;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);z-index:200;transform:translateX(150%);transition:transform .3s;max-width:320px}
-.toast.show{transform:translateX(0)}
-.toast.error{border-color:var(--red)}
-.toast.success{border-color:var(--green)}
+.nav-btn:hover { background: var(--gray2); color: var(--gray6); }
+.nav-btn.active { background: var(--white); color: var(--black); }
+
+.nav-btn .n-icon { font-size: 14px; width: 20px; text-align: center; }
+.nav-btn .n-num {
+  margin-left: auto;
+  font-size: 9px;
+  opacity: 0.4;
+  font-weight: 500;
+}
+
+.sidebar-stats {
+  margin-top: auto;
+  padding: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-row:last-child { border: none; }
+.stat-key { font-size: 10px; color: var(--gray5); }
+.stat-val { font-family: var(--display); font-size: 14px; font-weight: 700; }
+
+/* ── MAIN ── */
+.main {
+  overflow-y: auto;
+  height: calc(100vh - 60px);
+}
+
+.panel {
+  display: none;
+  padding: 40px 48px;
+  animation: fadeIn 0.2s ease;
+}
+
+.panel.active { display: block; }
+
+@keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+/* ── PANEL HEADER ── */
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 40px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-title {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+
+.panel-sub {
+  font-size: 11px;
+  color: var(--gray5);
+  letter-spacing: 0.04em;
+}
+
+.panel-num {
+  font-family: var(--display);
+  font-size: 72px;
+  font-weight: 900;
+  color: var(--gray2);
+  line-height: 1;
+  letter-spacing: -0.04em;
+  user-select: none;
+}
+
+/* ── FORM ── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.form-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.form-grid.cols-1 { grid-template-columns: 1fr; }
+
+.field { display: flex; flex-direction: column; gap: 8px; }
+.field.full { grid-column: 1 / -1; }
+
+.field label {
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--gray4);
+}
+
+.field input,
+.field textarea,
+.field select {
+  background: var(--gray1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px 14px;
+  color: var(--white);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+
+.field input:focus,
+.field textarea:focus {
+  border-color: var(--gray4);
+}
+
+.field textarea { resize: vertical; min-height: 90px; }
+
+.field-hint {
+  font-size: 10px;
+  color: var(--gray4);
+  letter-spacing: 0.04em;
+}
+
+/* ── BUTTON ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: 4px;
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+
+.btn-white {
+  background: var(--white);
+  color: var(--black);
+  border-color: var(--white);
+}
+
+.btn-white:hover { background: var(--gray6); border-color: var(--gray6); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--gray6);
+  border-color: var(--border);
+}
+
+.btn-outline:hover { border-color: var(--gray4); color: var(--white); }
+
+.btn-danger {
+  background: transparent;
+  color: var(--red);
+  border-color: #552020;
+}
+
+.btn-danger:hover { background: #1a0808; }
+
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.btn-row { display: flex; gap: 12px; align-items: center; margin-top: 8px; }
+
+/* ── DIVIDER ── */
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 32px 0;
+}
+
+/* ── RESULT BOX ── */
+.result-box {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 24px;
+  margin-top: 24px;
+  background: var(--gray1);
+  display: none;
+  animation: fadeIn 0.3s ease;
+}
+
+.result-box.show { display: block; }
+
+.result-box.ok    { border-color: #2a4020; background: #0a1208; }
+.result-box.err   { border-color: #402020; background: #120808; }
+.result-box.warn  { border-color: #403010; background: #120e04; }
+
+.result-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--gray4);
+  margin-bottom: 12px;
+}
+
+.result-id {
+  font-family: var(--display);
+  font-size: 48px;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.result-id.ok   { color: var(--green); }
+.result-id.err  { color: var(--red); }
+.result-id.warn { color: var(--amber); }
+
+.result-meta {
+  font-size: 11px;
+  color: var(--gray5);
+}
+
+/* ── VERDICT ── */
+.verdict-wrap {
+  display: none;
+  margin-top: 28px;
+  animation: fadeIn 0.4s ease;
+}
+
+.verdict-wrap.show { display: block; }
+
+.verdict-banner {
+  border-radius: 6px;
+  padding: 32px 36px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  margin-bottom: 16px;
+}
+
+.verdict-banner.approved { background: #0d1a06; border: 1px solid #2a4010; }
+.verdict-banner.partial  { background: #1a1206; border: 1px solid #403010; }
+.verdict-banner.rejected { background: #1a0606; border: 1px solid #401010; }
+
+.verdict-icon { font-size: 40px; flex-shrink: 0; }
+
+.verdict-text-wrap {}
+.verdict-verdict {
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.verdict-banner.approved .verdict-verdict { color: var(--green); }
+.verdict-banner.partial  .verdict-verdict { color: var(--amber); }
+.verdict-banner.rejected .verdict-verdict { color: var(--red); }
+
+.verdict-payout { font-size: 12px; color: var(--gray5); }
+
+.votes-strip {
+  display: flex;
+  gap: 8px;
+}
+
+.vote-pill {
+  flex: 1;
+  padding: 10px 0;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+  border: 1px solid;
+}
+
+.vote-pill.approved { background: #0d1a06; border-color: #2a4010; color: var(--green); }
+.vote-pill.partial  { background: #1a1206; border-color: #403010; color: var(--amber); }
+.vote-pill.rejected { background: #1a0606; border-color: #401010; color: var(--red); }
+
+/* ── STATUS CARD ── */
+.status-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  display: none;
+  margin-top: 24px;
+  animation: fadeIn 0.3s ease;
+}
+
+.status-card.show { display: block; }
+
+.status-card-head {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--gray1);
+}
+
+.status-card-title {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.status-badge {
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: 2px;
+  border: 1px solid;
+  font-weight: 500;
+}
+
+.status-badge.pending   { border-color: #443020; color: var(--amber); background: #1a1008; }
+.status-badge.submitted { border-color: #203040; color: var(--blue); background: #081018; }
+.status-badge.resolved  { border-color: #303030; color: var(--gray6); background: var(--gray1); }
+.status-badge.disputed  { border-color: #443020; color: var(--amber); background: #1a1008; }
+.status-badge.approved  { border-color: #2a4010; color: var(--green); background: #0d1a06; }
+.status-badge.partial   { border-color: #403010; color: var(--amber); background: #1a1206; }
+.status-badge.rejected  { border-color: #401010; color: var(--red); background: #1a0606; }
+.status-badge.claimed   { border-color: #2a4010; color: var(--green); background: #0d1a06; }
+
+.status-card-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+
+.status-field {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.status-field:nth-child(even) { border-right: none; }
+.status-field:nth-last-child(-n+2) { border-bottom: none; }
+
+.status-field-key {
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--gray4);
+  margin-bottom: 6px;
+}
+
+.status-field-val {
+  font-size: 12px;
+  color: var(--gray6);
+  word-break: break-all;
+}
+
+/* ── TERMINAL ── */
+.terminal {
+  background: var(--black);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  font-size: 11px;
+  line-height: 1.9;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-top: 16px;
+  display: none;
+}
+
+.terminal.show { display: block; }
+
+.t-line { display: flex; gap: 12px; }
+.t-time { color: var(--gray4); flex-shrink: 0; width: 60px; }
+.t-info { color: var(--gray5); }
+.t-ok   { color: var(--green); }
+.t-err  { color: var(--red); }
+.t-warn { color: var(--amber); }
+
+/* ── LOADER ── */
+.spin {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 1.5px solid rgba(255,255,255,0.2);
+  border-top-color: var(--white);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── AGENTS ── */
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.agent-tile {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  text-align: center;
+  background: var(--gray1);
+  transition: border-color 0.3s, background 0.3s;
+}
+
+.agent-tile.thinking { border-color: var(--gray4); background: #111; }
+.agent-tile.v-approved { border-color: #2a4010; background: #0d1a06; }
+.agent-tile.v-partial  { border-color: #403010; background: #1a1206; }
+.agent-tile.v-rejected { border-color: #401010; background: #1a0606; }
+
+.agent-num {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--gray3);
+  margin-bottom: 6px;
+}
+
+.agent-tile.thinking .agent-num { color: var(--gray5); }
+
+.agent-result {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--gray4);
+}
+
+.agent-tile.v-approved .agent-result { color: var(--green); }
+.agent-tile.v-partial  .agent-result { color: var(--amber); }
+.agent-tile.v-rejected .agent-result { color: var(--red); }
+
+/* ── INFO ROW ── */
+.info-row {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.info-cell {
+  flex: 1;
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
+}
+
+.info-cell:last-child { border-right: none; }
+.info-key { font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gray4); margin-bottom: 4px; }
+.info-val { font-size: 12px; color: var(--gray6); font-family: var(--mono); }
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--black); }
+::-webkit-scrollbar-thumb { background: var(--gray3); border-radius: 2px; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 768px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .panel { padding: 24px 20px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .agents-grid { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
 
-<div class="header">
-  <div class="header-left">
-    <h1>⚖ AI Escrow</h1>
-    <span class="subtitle">Trustless freelance payments, resolved by AI consensus</span>
-  </div>
-  <div class="stats">
-    <span>Total: <b id="stat-total">0</b></span>
-    <span>Pending: <b id="stat-pending">0</b></span>
-    <span>Resolved: <b id="stat-resolved">0</b></span>
-  </div>
-</div>
+<div class="layout">
 
-<div class="container">
-  <div class="grid">
+  <!-- HEADER -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-mark">⚖</div>
+      AI Escrow
+    </div>
+    <div class="header-right">
+      <span class="tag">GenLayer</span>
+      <span class="tag live"><span class="dot"></span>Studionet</span>
+    </div>
+  </header>
 
-    <!-- SIDEBAR: Actions -->
-    <div class="sidebar">
-
-      <!-- CREATE -->
-      <div class="panel">
-        <h3>Create Escrow</h3>
-        <div class="flow">
-          <span class="step active">Create</span>
-          <span class="arrow">→</span>
-          <span class="step">Submit</span>
-          <span class="arrow">→</span>
-          <span class="step">Arbitrate</span>
-        </div>
-        <input id="c-client" placeholder="Your address (client)" value="web" />
-        <input id="c-freelancer" placeholder="Freelancer address (0x...)" />
-        <input id="c-amount" placeholder="Amount ETH" type="number" step="0.001" />
-        <textarea id="c-task" placeholder="Task description (20-2000 chars)"></textarea>
-        <button class="btn" onclick="createEscrow()">Create Escrow</button>
-        <div id="c-result"></div>
-      </div>
-
-      <!-- SUBMIT -->
-      <div class="panel">
-        <h3>Submit Work</h3>
-        <div class="flow">
-          <span class="step">Create</span>
-          <span class="arrow">→</span>
-          <span class="step active">Submit</span>
-          <span class="arrow">→</span>
-          <span class="step">Arbitrate</span>
-        </div>
-        <input id="s-id" placeholder="Escrow ID" type="number" />
-        <input id="s-freelancer" placeholder="Your address (freelancer)" />
-        <input id="s-url" placeholder="Deliverable URL (https://...)" />
-        <button class="btn" onclick="submitWork()">Submit Deliverable</button>
-        <div id="s-result"></div>
-      </div>
-
-      <!-- ARBITRATE -->
-      <div class="panel">
-        <h3>Trigger Arbitration</h3>
-        <div class="flow">
-          <span class="step">Create</span>
-          <span class="arrow">→</span>
-          <span class="step">Submit</span>
-          <span class="arrow">→</span>
-          <span class="step active">Arbitrate</span>
-        </div>
-        <input id="a-id" placeholder="Escrow ID" type="number" />
-        <input id="a-caller" placeholder="Your address (client or freelancer)" />
-        <button class="btn" onclick="triggerArbitration()" id="a-btn">Run 3-Validator Consensus</button>
-        <div id="a-result"></div>
-      </div>
-
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Actions</div>
+      <button class="nav-btn active" onclick="nav('create',this)">
+        <span class="n-icon">＋</span> Create Escrow
+        <span class="n-num">01</span>
+      </button>
+      <button class="nav-btn" onclick="nav('submit',this)">
+        <span class="n-icon">↑</span> Submit Work
+        <span class="n-num">02</span>
+      </button>
+      <button class="nav-btn" onclick="nav('resolve',this)">
+        <span class="n-icon">⚡</span> Resolve
+        <span class="n-num">03</span>
+      </button>
+      <button class="nav-btn" onclick="nav('claim',this)">
+        <span class="n-icon">◎</span> Claim Payment
+        <span class="n-num">04</span>
+      </button>
     </div>
 
-    <!-- MAIN: List + Detail -->
-    <div class="main">
-
-      <!-- List -->
-      <div>
-        <div class="list-header">
-          <h2>📋 All Escrows</h2>
-          <div class="filter">
-            <select id="filter-status" onchange="loadList()">
-              <option value="all">All Statuses</option>
-              <option value="pending">Pending</option>
-              <option value="submitted">Submitted</option>
-              <option value="disputed">Disputed</option>
-              <option value="approved">Approved</option>
-              <option value="partial">Partial</option>
-              <option value="rejected">Rejected</option>
-            </select>
-            <button class="btn secondary small" onclick="loadList()">Refresh</button>
-          </div>
-        </div>
-        <div class="escrow-list" id="list"></div>
-      </div>
-
-      <!-- Detail -->
-      <div class="detail" id="detail-panel" style="display:none">
-        <h2>🔍 Escrow Details <span id="d-id"></span></h2>
-        <div class="detail-grid" id="d-grid"></div>
-
-        <div class="detail-section" id="d-votes-section" style="display:none">
-          <h4>Validator Votes</h4>
-          <div class="votes-row" id="d-votes"></div>
-          <div class="verdict-box">
-            <span class="label">Final Verdict:</span>
-            <span class="value" id="d-verdict"></span>
-          </div>
-        </div>
-      </div>
-
+    <div class="sidebar-section">
+      <div class="sidebar-label">Dispute</div>
+      <button class="nav-btn" onclick="nav('dispute',this)">
+        <span class="n-icon">⚠</span> Open Dispute
+        <span class="n-num">05</span>
+      </button>
+      <button class="nav-btn" onclick="nav('reresolve',this)">
+        <span class="n-icon">↺</span> Re-Resolve
+        <span class="n-num">06</span>
+      </button>
     </div>
-  </div>
-</div>
 
-<!-- Logs -->
-<div class="logs-panel">
-  <div class="logs-header">
-    <span><b>Audit Log</b> — Real-time execution trace</span>
-    <span id="log-count">0 entries</span>
-  </div>
-  <div class="logs-content" id="logs"></div>
-</div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Info</div>
+      <button class="nav-btn" onclick="nav('status',this)">
+        <span class="n-icon">◈</span> Check Status
+        <span class="n-num">07</span>
+      </button>
+    </div>
 
-<!-- Toast -->
-<div class="toast" id="toast"></div>
+    <div class="sidebar-stats">
+      <div class="sidebar-label" style="margin-bottom:8px">Contract</div>
+      <div class="stat-row">
+        <span class="stat-key">Total Escrows</span>
+        <span class="stat-val" id="statTotal">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">Validators</span>
+        <span class="stat-val">3</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">Fee</span>
+        <span class="stat-val">1%</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- 01 CREATE -->
+    <div id="panel-create" class="panel active">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Create Escrow</div>
+          <div class="panel-sub">Lock funds · Define task · Set dispute window</div>
+        </div>
+        <div class="panel-num">01</div>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Freelancer Address</label>
+          <input type="text" id="c_freelancer" placeholder="0x...">
+        </div>
+        <div class="field">
+          <label>Dispute Window (seconds)</label>
+          <input type="number" id="c_window" placeholder="300" min="60">
+          <span class="field-hint">Min 60s · e.g. 300 = 5 min · 86400 = 1 day</span>
+        </div>
+        <div class="field full">
+          <label>Task Description</label>
+          <textarea id="c_task" placeholder="Describe the deliverable precisely. Min 20 chars. The AI validators will use this to evaluate the work."></textarea>
+        </div>
+        <div class="field">
+          <label>Amount (GEN)</label>
+          <input type="number" id="c_amount" placeholder="1.0" min="0.001" step="0.001">
+          <span class="field-hint">Deposited into escrow contract</span>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" onclick="doCreate()">Create Escrow →</button>
+      </div>
+
+      <div class="result-box" id="c_result">
+        <div class="result-label">Escrow Created</div>
+        <div class="result-id ok" id="c_result_id">#0</div>
+        <div class="result-meta" id="c_result_meta"></div>
+      </div>
+
+      <div class="terminal" id="c_log"></div>
+    </div>
+
+    <!-- 02 SUBMIT -->
+    <div id="panel-submit" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Submit Work</div>
+          <div class="panel-sub">Freelancer submits deliverable URL · Status → submitted</div>
+        </div>
+        <div class="panel-num">02</div>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="s_id" placeholder="0" min="0">
+        </div>
+        <div class="field">
+          <label>Deliverable URL</label>
+          <input type="text" id="s_url" placeholder="https://github.com/...">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" onclick="doSubmit()">Submit Deliverable →</button>
+      </div>
+
+      <div class="result-box" id="s_result">
+        <div class="result-label">Submitted</div>
+        <div class="result-id ok">OK</div>
+        <div class="result-meta">Status updated to submitted</div>
+      </div>
+
+      <div class="terminal" id="s_log"></div>
+    </div>
+
+    <!-- 03 RESOLVE -->
+    <div id="panel-resolve" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Resolve Escrow</div>
+          <div class="panel-sub">3 LLM validators vote · Funds frozen · Dispute window opens</div>
+        </div>
+        <div class="panel-num">03</div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="r_id" placeholder="0" min="0">
+          <span class="field-hint">Must be submitted status · Only client, freelancer or owner can call</span>
+        </div>
+      </div>
+
+      <div class="agents-grid" id="r_agents" style="display:none">
+        <div class="agent-tile" id="r_a1">
+          <div class="agent-num">01</div>
+          <div class="agent-result" id="r_a1v">WAITING</div>
+        </div>
+        <div class="agent-tile" id="r_a2">
+          <div class="agent-num">02</div>
+          <div class="agent-result" id="r_a2v">WAITING</div>
+        </div>
+        <div class="agent-tile" id="r_a3">
+          <div class="agent-num">03</div>
+          <div class="agent-result" id="r_a3v">WAITING</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" id="r_btn" onclick="doResolve()">Run AI Arbitration →</button>
+      </div>
+
+      <div class="verdict-wrap" id="r_verdict">
+        <div class="verdict-banner" id="r_vbanner">
+          <div class="verdict-icon" id="r_vicon"></div>
+          <div class="verdict-text-wrap">
+            <div class="verdict-verdict" id="r_vlabel"></div>
+            <div class="verdict-payout" id="r_vpayout"></div>
+          </div>
+        </div>
+        <div class="votes-strip" id="r_votes"></div>
+      </div>
+
+      <div class="terminal" id="r_log"></div>
+    </div>
+
+    <!-- 04 CLAIM -->
+    <div id="panel-claim" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Claim Payment</div>
+          <div class="panel-sub">After dispute window expires · No dispute was opened</div>
+        </div>
+        <div class="panel-num">04</div>
+      </div>
+
+      <div class="info-row">
+        <div class="info-cell">
+          <div class="info-key">When to call</div>
+          <div class="info-val">After dispute_window_seconds passes from resolved_at</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Who can call</div>
+          <div class="info-val">Anyone (winner auto-receives funds)</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Required status</div>
+          <div class="info-val">resolved</div>
+        </div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="cl_id" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" onclick="doClaim()">Claim Payment →</button>
+      </div>
+
+      <div class="result-box" id="cl_result">
+        <div class="result-label">Payment Claimed</div>
+        <div class="result-id ok" id="cl_result_verdict">—</div>
+        <div class="result-meta" id="cl_result_meta"></div>
+      </div>
+
+      <div class="terminal" id="cl_log"></div>
+    </div>
+
+    <!-- 05 DISPUTE -->
+    <div id="panel-dispute" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Open Dispute</div>
+          <div class="panel-sub">Client or freelancer disagrees with verdict · Window must be open</div>
+        </div>
+        <div class="panel-num">05</div>
+      </div>
+
+      <div class="info-row">
+        <div class="info-cell">
+          <div class="info-key">Required status</div>
+          <div class="info-val">resolved</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Who can call</div>
+          <div class="info-val">Client or Freelancer only</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Window</div>
+          <div class="info-val">Must be within dispute_window_seconds</div>
+        </div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="d_id" placeholder="0" min="0">
+          <span class="field-hint">Switch wallet to client or freelancer before calling</span>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-danger" onclick="doDispute()">Open Dispute →</button>
+      </div>
+
+      <div class="result-box" id="d_result">
+        <div class="result-label">Dispute Opened</div>
+        <div class="result-id warn">DISPUTED</div>
+        <div class="result-meta">Status updated · Funds remain frozen · Call Re-Resolve next</div>
+      </div>
+
+      <div class="terminal" id="d_log"></div>
+    </div>
+
+    <!-- 06 RE-RESOLVE -->
+    <div id="panel-reresolve" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Re-Resolve</div>
+          <div class="panel-sub">Second LLM arbitration · Final payout executed automatically</div>
+        </div>
+        <div class="panel-num">06</div>
+      </div>
+
+      <div class="info-row">
+        <div class="info-cell">
+          <div class="info-key">Required status</div>
+          <div class="info-val">disputed</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Payout</div>
+          <div class="info-val">Automatic on consensus</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Final?</div>
+          <div class="info-val">Yes — no further appeals</div>
+        </div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="rr_id" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="agents-grid" id="rr_agents" style="display:none">
+        <div class="agent-tile" id="rr_a1">
+          <div class="agent-num">01</div>
+          <div class="agent-result" id="rr_a1v">WAITING</div>
+        </div>
+        <div class="agent-tile" id="rr_a2">
+          <div class="agent-num">02</div>
+          <div class="agent-result" id="rr_a2v">WAITING</div>
+        </div>
+        <div class="agent-tile" id="rr_a3">
+          <div class="agent-num">03</div>
+          <div class="agent-result" id="rr_a3v">WAITING</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-white" id="rr_btn" onclick="doReresolve()">Run Re-Arbitration →</button>
+      </div>
+
+      <div class="verdict-wrap" id="rr_verdict">
+        <div class="verdict-banner" id="rr_vbanner">
+          <div class="verdict-icon" id="rr_vicon"></div>
+          <div class="verdict-text-wrap">
+            <div class="verdict-verdict" id="rr_vlabel"></div>
+            <div class="verdict-payout" id="rr_vpayout"></div>
+          </div>
+        </div>
+        <div class="votes-strip" id="rr_votes"></div>
+      </div>
+
+      <div class="terminal" id="rr_log"></div>
+    </div>
+
+    <!-- 07 STATUS -->
+    <div id="panel-status" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Check Status</div>
+          <div class="panel-sub">Read escrow state from contract</div>
+        </div>
+        <div class="panel-num">07</div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="st_id" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="doStatus()">Fetch Status</button>
+      </div>
+
+      <div class="status-card" id="st_card">
+        <div class="status-card-head">
+          <div class="status-card-title">Escrow #<span id="st_num">—</span></div>
+          <div class="status-badge" id="st_badge">—</div>
+        </div>
+        <div class="status-card-body">
+          <div class="status-field">
+            <div class="status-field-key">Client</div>
+            <div class="status-field-val" id="st_client">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Freelancer</div>
+            <div class="status-field-val" id="st_freelancer">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Amount (wei)</div>
+            <div class="status-field-val" id="st_amount">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Dispute Window</div>
+            <div class="status-field-val" id="st_window">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Final Verdict</div>
+            <div class="status-field-val" id="st_verdict">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Resolved At</div>
+            <div class="status-field-val" id="st_resolved">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Votes</div>
+            <div class="status-field-val" id="st_votes">—</div>
+          </div>
+          <div class="status-field">
+            <div class="status-field-key">Deliverable URL</div>
+            <div class="status-field-val" id="st_url" style="word-break:break-all">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="terminal" id="st_log"></div>
+    </div>
+
+  </main>
+</div>
 
 <script>
+const API_BASE = 'https://ai-escrow-5qt3bpf4e3bv.biosolverr.deno.net';
+const API = window.location.hostname === 'localhost' ? 'http://localhost:8000' : API_BASE;
 
-// ── Helpers ──────────────────────────────────
-
-function $(id){return document.getElementById(id)}
-function badge(status){return '<span class="badge badge-'+status+'">'+status+'</span>'}
-function votePill(v){return '<span class="vote-pill vote-'+v+'">'+v+'</span>'}
-
-function showToast(msg, type='success'){
-  const t=$('toast');
-  t.textContent=msg;
-  t.className='toast '+type+' show';
-  setTimeout(()=>t.classList.remove('show'), 4000);
+// ── NAV ──────────────────────────────────────────────────────────────────────
+function nav(name, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  btn.classList.add('active');
 }
 
-function setResult(id, html, isError=false){
-  $(id).innerHTML=html;
-  $(id).className=isError?'error':'success';
+// ── LOG ──────────────────────────────────────────────────────────────────────
+function log(id, msg, type = 'info') {
+  const el = document.getElementById(id);
+  el.classList.add('show');
+  const t = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const line = document.createElement('div');
+  line.className = 't-line';
+  line.innerHTML = \`<span class="t-time">\${t}</span><span class="t-\${type}">\${msg}</span>\`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
 }
 
-function formatDate(ts){
-  if(!ts||ts===0)return'—';
-  return new Date(ts).toLocaleString();
-}
-
-function formatAddr(a){
-  if(!a)return'—';
-  if(a.length>20)return a.slice(0,8)+'...'+a.slice(-6);
-  return a;
-}
-
-// ── API Calls ────────────────────────────────
-
-async function createEscrow(){
-  const btn=event.target;
-  btn.disabled=true;
-  try{
-    const body={
-      client: $('c-client').value||'web',
-      freelancer: $('c-freelancer').value,
-      amount_eth: $('c-amount').value,
-      task_description: $('c-task').value,
-    };
-    const r=await fetch('/api/escrow/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const d=await r.json();
-    if(d.success){
-      setResult('c-result','✅ Escrow #'+d.escrow_id+' created '+badge('pending'));
-      showToast('Escrow #'+d.escrow_id+' created');
-      $('filter-status').value = 'all';
-      loadList(); loadStats(); loadLogs();
-    }else{
-      setResult('c-result','❌ '+(d.error||'Failed'),true);
-      showToast(d.error||'Failed','error');
-    }
-  }catch(e){
-    setResult('c-result','❌ '+e.message,true);
-    showToast(e.message,'error');
-  }
-  btn.disabled=false;
-}
-
-async function submitWork(){
-  const btn=event.target;
-  btn.disabled=true;
-  try{
-    const id=$('s-id').value;
-    const body={deliverable_url:$('s-url').value,freelancer:$('s-freelancer').value};
-    const r=await fetch('/api/escrow/'+id+'/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const d=await r.json();
-    if(d.success){
-      setResult('s-result','✅ Work submitted to #'+id+' '+badge('submitted'));
-      showToast('Work submitted to #'+id);
-      $('filter-status').value = 'all';
-      loadList(); loadStats(); loadLogs();
-    }else{
-      setResult('s-result','❌ '+(d.error||'Failed'),true);
-      showToast(d.error||'Failed','error');
-    }
-  }catch(e){
-    setResult('s-result','❌ '+e.message,true);
-    showToast(e.message,'error');
-  }
-  btn.disabled=false;
-}
-
-async function triggerArbitration(){
-  const btn=$('a-btn');
-  btn.disabled=true;
-  btn.textContent='Running consensus...';
-  try{
-    const id=$('a-id').value;
-    const caller=$('a-caller').value;
-    showToast('Starting arbitration for #'+id+'...');
-    const r=await fetch('/api/escrow/'+id+'/arbitrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({caller})});
-    const d=await r.json();
-    if(d.success){
-      const votesHtml=(d.votes||[]).map(v=>votePill(v)).join('');
-      setResult('a-result','✅ Consensus reached: '+badge(d.final_verdict)+'<br/><div class="votes-row" style="margin-top:8px">'+votesHtml+'</div>');
-      showToast('Arbitration complete: '+d.final_verdict);
-      $('filter-status').value = 'all';
-      loadList(); loadStats(); loadLogs();
-      // Auto-inspect after arbitration
-      setTimeout(()=>inspectEscrow(id), 300);
-    }else{
-      setResult('a-result','❌ '+(d.error||'Failed'),true);
-      showToast(d.error||'Failed','error');
-    }
-  }catch(e){
-    setResult('a-result','❌ '+e.message,true);
-    showToast(e.message,'error');
-  }
-  btn.disabled=false;
-  btn.textContent='Run 3-Validator Consensus';
-}
-
-// ── List & Detail ────────────────────────────
-
-function renderEscrowItem(e){
-  const created=formatDate(e.created_at);
-  return '<div class="escrow-item" onclick="inspectEscrow('+e.id+')">'+
-    '<div class="id">#'+e.id+'</div>'+
-    '<div class="info">'+
-      '<div class="meta"><strong>'+formatAddr(e.client)+'</strong> → <strong>'+formatAddr(e.freelancer)+'</strong> · '+e.amount_eth+' ETH</div>'+
-      '<div class="task-preview">'+e.task_description.substring(0,80)+(e.task_description.length>80?'...':'')+'</div>'+
-    '</div>'+
-    '<div class="side">'+badge(e.status)+'<span class="date">'+created+'</span></div>'+
-  '</div>';
-}
-
-async function loadList(){
-  try{
-    const r=await fetch('/api/escrows');
-    const d=await r.json();
-    const list=d.escrows||[];
-    const filter=$('filter-status').value;
-    const filtered=filter==='all'?list:list.filter(e=>e.status===filter);
-
-    if(filtered.length===0){
-      $('list').innerHTML='<div class="empty"><div class="empty-icon">📭</div>No escrows found</div>';
-      return;
-    }
-    $('list').innerHTML=filtered.map(renderEscrowItem).join('');
-  }catch(e){
-    $('list').innerHTML='<div class="empty">Error loading escrows</div>';
-  }
-}
-
-async function loadStats(){
-  try{
-    const r=await fetch('/api/stats');
-    const d=await r.json();
-    $('stat-total').textContent=d.total||0;
-    $('stat-pending').textContent=d.pending||0;
-    $('stat-resolved').textContent=d.resolved||0;
-  }catch(e){}
-}
-
-async function inspectEscrow(id){
-  if(!id) return;
-  try{
-    const r=await fetch('/api/escrow/'+id);
-    const d=await r.json();
-    if(d.error){$('detail-panel').style.display='none';return;}
-
-    $('detail-panel').style.display='block';
-    $('d-id').innerHTML=badge(d.status);
-
-    let html='';
-    html+='<div class="label">ID</div><div class="value">#'+d.id+'</div>';
-    html+='<div class="label">Client</div><div class="value">'+d.client+'</div>';
-    html+='<div class="label">Freelancer</div><div class="value">'+d.freelancer+'</div>';
-    html+='<div class="label">Amount</div><div class="value">'+d.amount_eth+' ETH</div>';
-    html+='<div class="label">Status</div><div class="value">'+badge(d.status)+'</div>';
-    html+='<div class="label">Created</div><div class="value">'+formatDate(d.created_at)+'</div>';
-    html+='<div class="label">Resolved</div><div class="value">'+formatDate(d.resolved_at)+'</div>';
-    html+='<div class="label">Task</div><div class="value">'+d.task_description+'</div>';
-    html+='<div class="label">Deliverable</div><div class="value">'+(d.deliverable_url?'<a href="'+d.deliverable_url+'" target="_blank">'+d.deliverable_url+'</a>':'—')+'</div>';
-    $('d-grid').innerHTML=html;
-
-    if(d.votes&&d.votes.length){
-      $('d-votes-section').style.display='block';
-      $('d-votes').innerHTML=d.votes.map(v=>votePill(v)).join('');
-      $('d-verdict').innerHTML=badge(d.final_verdict);
-    }else{
-      $('d-votes-section').style.display='none';
-    }
-
-    // Scroll to detail
-    $('detail-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
-  }catch(e){}
-}
-
-// ── Logs ─────────────────────────────────────
-
-async function loadLogs(){
-  try{
-    const r=await fetch('/api/logs');
-    const d=await r.json();
-    const logs=d.logs||[];
-    $('log-count').textContent=logs.length+' entries';
-    const el=$('logs');
-    el.innerHTML='';
-    logs.slice(-50).reverse().forEach(entry=>{
-      try{
-        const p=JSON.parse(entry);
-        const div=document.createElement('div');
-        div.className='entry';
-        const dataStr = typeof p.data === 'string' ? p.data : JSON.stringify(p.data || {});
-        div.innerHTML='<span class="time">'+new Date(p.t).toLocaleTimeString()+'</span>'+
-          '<span class="action">'+p.action+'</span>'+
-          '<span class="data">'+dataStr+'</span>';
-        el.appendChild(div);
-      }catch(e){}
+// ── API CALL ─────────────────────────────────────────────────────────────────
+async function apiCall(endpoint, body, logId) {
+  try {
+    const res = await fetch(\`\${API}\${endpoint}\`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
     });
-  }catch(e){}
+    return await res.json();
+  } catch(e) {
+    log(logId, \`Connection error: \${e.message}\`, 'err');
+    return null;
+  }
 }
 
-// ── Init ─────────────────────────────────────
+// ── VERDICT HELPERS ──────────────────────────────────────────────────────────
+const VERDICT_CFG = {
+  approved: { icon:'✓', label:'APPROVED', payout:'Full payment → Freelancer', cls:'approved' },
+  partial:  { icon:'◑', label:'PARTIAL',  payout:'50% Freelancer · 50% Client', cls:'partial' },
+  rejected: { icon:'✕', label:'REJECTED', payout:'Full refund → Client', cls:'rejected' },
+};
 
-loadList();
-loadStats();
-loadLogs();
-setInterval(()=>{loadList();loadStats();loadLogs();},8000);
+function renderVerdict(prefix, verdict, votes) {
+  const cfg = VERDICT_CFG[verdict] || VERDICT_CFG.partial;
+  const wrap = document.getElementById(prefix + '_verdict');
+  const banner = document.getElementById(prefix + '_vbanner');
+  banner.className = \`verdict-banner \${cfg.cls}\`;
+  document.getElementById(prefix + '_vicon').textContent = cfg.icon;
+  document.getElementById(prefix + '_vlabel').textContent = cfg.label;
+  document.getElementById(prefix + '_vpayout').textContent = cfg.payout;
+  const vRow = document.getElementById(prefix + '_votes');
+  vRow.innerHTML = (votes || []).map((v,i) =>
+    \`<div class="vote-pill \${v}">Agent \${i+1}: \${v.toUpperCase()}</div>\`
+  ).join('');
+  wrap.classList.add('show');
+}
 
+function renderAgentThinking(prefix) {
+  for (let i = 1; i <= 3; i++) {
+    document.getElementById(\`\${prefix}_a\${i}\`).className = 'agent-tile thinking';
+    document.getElementById(\`\${prefix}_a\${i}v\`).textContent = '...';
+  }
+}
+
+function renderAgentResult(prefix, votes) {
+  for (let i = 0; i < 3; i++) {
+    const v = votes[i] || 'partial';
+    document.getElementById(\`\${prefix}_a\${i+1}\`).className = \`agent-tile v-\${v}\`;
+    document.getElementById(\`\${prefix}_a\${i+1}v\`).textContent = v.toUpperCase();
+  }
+}
+
+// ── 01 CREATE ─────────────────────────────────────────────────────────────────
+async function doCreate() {
+  const freelancer = document.getElementById('c_freelancer').value.trim();
+  const window_s   = document.getElementById('c_window').value;
+  const task       = document.getElementById('c_task').value.trim();
+  const amount     = document.getElementById('c_amount').value;
+
+  if (!freelancer || !window_s || !task || !amount) {
+    log('c_log', 'All fields required', 'err'); return;
+  }
+  if (task.length < 20) { log('c_log', 'Task too short (min 20 chars)', 'err'); return; }
+  if (parseInt(window_s) < 60) { log('c_log', 'Dispute window min 60 seconds', 'err'); return; }
+
+  log('c_log', 'Sending create_escrow...', 'info');
+
+  const data = await apiCall('/escrow/create', {
+    freelancer, amount, task_spec: task, dispute_window_seconds: parseInt(window_s)
+  }, 'c_log');
+
+  if (data?.escrow_id !== undefined) {
+    log('c_log', \`Escrow #\${data.escrow_id} created · \${amount} GEN locked\`, 'ok');
+    log('c_log', \`Dispute window: \${window_s}s\`, 'info');
+    const box = document.getElementById('c_result');
+    document.getElementById('c_result_id').textContent = '#' + data.escrow_id;
+    document.getElementById('c_result_meta').textContent = \`\${amount} GEN · Window: \${window_s}s · \${freelancer.slice(0,14)}...\`;
+    box.classList.add('show');
+    fetchStats();
+  } else if (data?.error) {
+    log('c_log', \`Error: \${data.error}\`, 'err');
+  }
+}
+
+// ── 02 SUBMIT ─────────────────────────────────────────────────────────────────
+async function doSubmit() {
+  const id  = document.getElementById('s_id').value;
+  const url = document.getElementById('s_url').value.trim();
+  if (id === '' || !url) { log('s_log', 'All fields required', 'err'); return; }
+
+  log('s_log', \`Submitting deliverable for escrow #\${id}...\`, 'info');
+
+  const data = await apiCall(\`/escrow/\${id}/submit\`, { deliverable_url: url }, 's_log');
+
+  if (data?.ok) {
+    log('s_log', 'Deliverable submitted · Status → submitted', 'ok');
+    document.getElementById('s_result').classList.add('show');
+  } else {
+    log('s_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+  }
+}
+
+// ── 03 RESOLVE ────────────────────────────────────────────────────────────────
+async function doResolve() {
+  const id = document.getElementById('r_id').value;
+  if (id === '') { log('r_log', 'Escrow ID required', 'err'); return; }
+
+  const btn = document.getElementById('r_btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Running validators...';
+
+  document.getElementById('r_agents').style.display = 'grid';
+  document.getElementById('r_verdict').classList.remove('show');
+  renderAgentThinking('r');
+
+  log('r_log', \`resolve_escrow(\${id}) · 3 LLM validators...\`, 'info');
+
+  const data = await apiCall(\`/escrow/\${id}/resolve\`, {}, 'r_log');
+
+  if (data?.ok) {
+    const votes = data.votes || [];
+    renderAgentResult('r', votes);
+    votes.forEach((v,i) => log('r_log', \`Validator \${i+1} → \${v.toUpperCase()}\`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
+    log('r_log', \`Verdict: \${data.final_verdict?.toUpperCase()} · Funds frozen · Dispute window open\`, 'ok');
+    renderVerdict('r', data.final_verdict, votes);
+  } else {
+    log('r_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+    document.getElementById('r_agents').style.display = 'none';
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = 'Run AI Arbitration →';
+}
+
+// ── 04 CLAIM ─────────────────────────────────────────────────────────────────
+async function doClaim() {
+  const id = document.getElementById('cl_id').value;
+  if (id === '') { log('cl_log', 'Escrow ID required', 'err'); return; }
+
+  log('cl_log', \`claim_payment(\${id})...\`, 'info');
+
+  const data = await apiCall(\`/escrow/\${id}/claim\`, {}, 'cl_log');
+
+  if (data?.ok) {
+    log('cl_log', \`Payment claimed · Verdict: \${data.verdict?.toUpperCase()}\`, 'ok');
+    const box = document.getElementById('cl_result');
+    document.getElementById('cl_result_verdict').textContent = data.verdict?.toUpperCase() || 'OK';
+    document.getElementById('cl_result_meta').textContent = VERDICT_CFG[data.verdict]?.payout || '';
+    box.classList.add('show');
+  } else {
+    log('cl_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+  }
+}
+
+// ── 05 DISPUTE ────────────────────────────────────────────────────────────────
+async function doDispute() {
+  const id = document.getElementById('d_id').value;
+  if (id === '') { log('d_log', 'Escrow ID required', 'err'); return; }
+
+  log('d_log', \`dispute_escrow(\${id})...\`, 'warn');
+
+  const data = await apiCall(\`/escrow/\${id}/dispute\`, {}, 'd_log');
+
+  if (data?.ok) {
+    log('d_log', 'Dispute opened · Status → disputed · Funds frozen', 'ok');
+    document.getElementById('d_result').classList.add('show');
+  } else {
+    log('d_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+  }
+}
+
+// ── 06 RE-RESOLVE ─────────────────────────────────────────────────────────────
+async function doReresolve() {
+  const id = document.getElementById('rr_id').value;
+  if (id === '') { log('rr_log', 'Escrow ID required', 'err'); return; }
+
+  const btn = document.getElementById('rr_btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Re-arbitrating...';
+
+  document.getElementById('rr_agents').style.display = 'grid';
+  document.getElementById('rr_verdict').classList.remove('show');
+  renderAgentThinking('rr');
+
+  log('rr_log', \`re_resolve_escrow(\${id}) · Final arbitration...\`, 'warn');
+
+  const data = await apiCall(\`/escrow/\${id}/re-resolve\`, {}, 'rr_log');
+
+  if (data?.ok) {
+    const votes = data.votes || [];
+    renderAgentResult('rr', votes);
+    votes.forEach((v,i) => log('rr_log', \`Validator \${i+1} → \${v.toUpperCase()}\`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
+    log('rr_log', \`Final verdict: \${data.final_verdict?.toUpperCase()} · Payout executed\`, 'ok');
+    renderVerdict('rr', data.final_verdict, votes);
+  } else {
+    log('rr_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+    document.getElementById('rr_agents').style.display = 'none';
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = 'Run Re-Arbitration →';
+}
+
+// ── 07 STATUS ─────────────────────────────────────────────────────────────────
+async function doStatus() {
+  const id = document.getElementById('st_id').value;
+  if (id === '') return;
+
+  log('st_log', \`get_escrow(\${id})...\`, 'info');
+
+  try {
+    const res = await fetch(\`\${API}/escrow/\${id}\`);
+    const data = await res.json();
+
+    if (data.status) {
+      document.getElementById('st_num').textContent = id;
+      document.getElementById('st_client').textContent    = data.client || '—';
+      document.getElementById('st_freelancer').textContent = data.freelancer || '—';
+      document.getElementById('st_amount').textContent   = data.amount_wei || '—';
+      document.getElementById('st_window').textContent   = (data.dispute_window_seconds || '—') + 's';
+      document.getElementById('st_verdict').textContent  = data.final_verdict || '—';
+      document.getElementById('st_votes').textContent    = (data.votes || []).join(', ') || '—';
+      document.getElementById('st_url').textContent      = data.deliverable_url || '—';
+
+      const ts = data.resolved_at;
+      document.getElementById('st_resolved').textContent = ts && ts > 0
+        ? new Date(ts * 1000).toLocaleString()
+        : '—';
+
+      const badge = document.getElementById('st_badge');
+      badge.textContent = (data.status || '—').toUpperCase();
+      badge.className = \`status-badge \${data.status || ''}\`;
+
+      document.getElementById('st_card').classList.add('show');
+      log('st_log', \`Status: \${data.status?.toUpperCase()}\`, 'ok');
+    } else {
+      log('st_log', 'Escrow not found', 'err');
+    }
+  } catch(e) {
+    log('st_log', \`Error: \${e.message}\`, 'err');
+  }
+}
+
+// ── STATS ──────────────────────────────────────────────────────────────────
+async function fetchStats() {
+  try {
+    const res = await fetch(\`\${API}/stats\`);
+    const data = await res.json();
+    if (data.total_escrows !== undefined) {
+      document.getElementById('statTotal').textContent = data.total_escrows;
+    }
+  } catch {}
+}
+
+fetchStats();
 </script>
 </body>
-</html>`;
+</html>
+`;
 }
 
-// ─────────────────────────────────────────────
-// Router — Strict Contract Logic
-// ─────────────────────────────────────────────
+// ── Router ───────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
   if (req.method === "OPTIONS") return new Response(null, { headers: cors() });
 
-  // Health
+  // ── Frontend ──
+  if (url.pathname === "/" || url.pathname === "/index.html") {
+    return new Response(frontendHTML(), {
+      headers: cors({ "Content-Type": "text/html; charset=utf-8" }),
+    });
+  }
+
+  // ── Health ──
   if (url.pathname === "/health") {
-    const c = await kv.get(["counter"]);
-    return json({ ok: true, counter: Number(c.value ?? 0n) });
+    return json({ ok: true, network: "STUDIONET" });
   }
 
-  // Frontend
-  if (url.pathname === "/") {
-    return new Response(frontendHTML(), { headers: cors({ "Content-Type": "text/html" }) });
+  // ── Stats ──
+  if (url.pathname === "/stats") {
+    try {
+      const all = await getAllEscrows();
+      return json({ total_escrows: all.length });
+    } catch { return json({ total_escrows: 0 }); }
   }
 
-  // GET ALL ESCROWS
-  if (url.pathname === "/api/escrows") {
-    const escrows = await getAllEscrows();
-    return json({ escrows });
-  }
-
-  // GET STATS
-  if (url.pathname === "/api/stats") {
-    const all = await getAllEscrows();
-    const total = all.length;
-    const pending = all.filter(e => e.status === "pending").length;
-    const resolved = all.filter(e => ["approved", "partial", "rejected"].includes(e.status)).length;
-    return json({ total, pending, resolved });
-  }
-
-  // GET LOGS
-  if (url.pathname === "/api/logs") {
-    const logs = await getLogs();
-    return json({ logs });
-  }
-
-  // GET SINGLE ESCROW
-  const mGet = url.pathname.match(/^\/api\/escrow\/(\d+)$/);
+  // ── GET /escrow/:id ──
+  const mGet = url.pathname.match(/^\/escrow\/(\d+)$/);
   if (mGet && req.method === "GET") {
     const e = await getEscrow(Number(mGet[1]));
-    return json(e ?? { error: "Escrow not found" });
+    if (!e) return json({ error: "Escrow not found" }, 404);
+    return json({
+      ...e,
+      amount_wei: String(Math.round(parseFloat(e.amount_eth) * 1e18)),
+    });
   }
 
-  // CREATE ESCROW
-  if (url.pathname === "/api/escrow/create" && req.method === "POST") {
+  // ── POST /escrow/create ──
+  if (url.pathname === "/escrow/create" && req.method === "POST") {
     try {
       const b = await req.json();
-
-      // Validation (as per contract)
-      const client = (b.client ?? "web").trim();
       const freelancer = (b.freelancer ?? "").trim();
-      const amountEth = String(b.amount_eth ?? "").trim();
-      const task = (b.task_description ?? "").trim();
+      const task = (b.task_spec ?? b.task_description ?? "").trim();
+      const amount = String(b.amount ?? b.amount_eth ?? "").trim();
+      const window_s = Number(b.dispute_window_seconds ?? 300);
 
-      if (!freelancer) return json({ success: false, error: "Freelancer address required" }, 400);
-      if (freelancer === client) return json({ success: false, error: "Client and freelancer must differ" }, 400);
-      if (!amountEth || isNaN(Number(amountEth)) || Number(amountEth) <= 0) return json({ success: false, error: "Must deposit funds (amount > 0)" }, 400);
-      if (task.length < 20) return json({ success: false, error: "Task description too short (min 20 chars)" }, 400);
-      if (task.length > 2000) return json({ success: false, error: "Task description too long (max 2000 chars)" }, 400);
+      if (!freelancer) return json({ error: "Freelancer required" }, 400);
+      if (task.length < 20) return json({ error: "Task min 20 chars" }, 400);
+      if (task.length > 2000) return json({ error: "Task max 2000 chars" }, 400);
+      if (!amount || isNaN(Number(amount)) || Number(amount) <= 0)
+        return json({ error: "Amount must be > 0" }, 400);
+      if (window_s < 60) return json({ error: "Dispute window min 60s" }, 400);
 
       const id = await nextId();
-      const now = Date.now();
-
       const e: Escrow = {
         id,
-        client,
+        client: b.client ?? "unknown",
         freelancer,
-        amount_eth: amountEth,
+        amount_eth: amount,
         task_description: task,
         deliverable_url: "",
         status: "pending",
         votes: [],
         final_verdict: "",
-        created_at: now,
+        created_at: Math.floor(Date.now() / 1000),
         resolved_at: 0,
+        dispute_window_seconds: window_s,
       };
-
       await setEscrow(e);
-      await addLog("create_escrow", { escrow_id: id, client, freelancer, amount: amountEth });
-
-      return json({ success: true, escrow_id: id });
+      return json({ ok: true, escrow_id: id });
     } catch (err) {
-      return json({ success: false, error: err.message }, 500);
+      return json({ error: err.message }, 500);
     }
   }
 
-  // SUBMIT WORK
-  const mSubmit = url.pathname.match(/^\/api\/escrow\/(\d+)\/submit$/);
+  // ── POST /escrow/:id/submit ──
+  const mSubmit = url.pathname.match(/^\/escrow\/(\d+)\/submit$/);
   if (mSubmit && req.method === "POST") {
     try {
       const id = Number(mSubmit[1]);
       const b = await req.json();
       const e = await getEscrow(id);
-
-      if (!e) return json({ success: false, error: "Escrow not found" }, 404);
-
-      const caller = (b.freelancer ?? "").trim();
-      const deliverableUrl = (b.deliverable_url ?? "").trim();
-
-      // Validation (as per contract)
-      if (caller !== e.freelancer) return json({ success: false, error: "Only freelancer can submit work" }, 403);
-      if (e.status !== "pending") return json({ success: false, error: "Escrow not in PENDING state" }, 400);
-      if (deliverableUrl.length < 5) return json({ success: false, error: "Invalid deliverable URL" }, 400);
-      if (!deliverableUrl.startsWith("http")) return json({ success: false, error: "URL must start with http" }, 400);
-
-      e.deliverable_url = deliverableUrl;
+      if (!e) return json({ error: "Not found" }, 404);
+      if (e.status !== "pending") return json({ error: "Not in PENDING state" }, 400);
+      const url_val = (b.deliverable_url ?? "").trim();
+      if (!url_val) return json({ error: "URL required" }, 400);
+      e.deliverable_url = url_val;
       e.status = "submitted";
-
       await setEscrow(e);
-      await addLog("submit_work", { escrow_id: id, freelancer: caller, url: deliverableUrl });
-
-      return json({ success: true });
+      return json({ ok: true });
     } catch (err) {
-      return json({ success: false, error: err.message }, 500);
+      return json({ error: err.message }, 500);
     }
   }
 
-  // TRIGGER ARBITRATION
-  const mArb = url.pathname.match(/^\/api\/escrow\/(\d+)\/arbitrate$/);
-  if (mArb && req.method === "POST") {
+  // ── POST /escrow/:id/resolve ──
+  const mResolve = url.pathname.match(/^\/escrow\/(\d+)\/resolve$/);
+  if (mResolve && req.method === "POST") {
     try {
-      const id = Number(mArb[1]);
-      const b = await req.json().catch(() => ({}));
+      const id = Number(mResolve[1]);
       const e = await getEscrow(id);
+      if (!e) return json({ error: "Not found" }, 404);
+      if (e.status !== "submitted") return json({ error: "Not in SUBMITTED state" }, 400);
 
-      if (!e) return json({ success: false, error: "Escrow not found" }, 404);
-
-      const caller = (b.caller ?? "").trim();
-      if (!caller) return json({ success: false, error: "Caller address required" }, 400);
-
-      // Validation (as per contract)
-      if (e.status !== "submitted") return json({ success: false, error: "Work must be submitted before arbitration" }, 400);
-      if (![e.client, e.freelancer].includes(caller)) return json({ success: false, error: "Only parties to this escrow can trigger arbitration" }, 403);
-
-      // Mark disputed
-      e.status = "disputed";
-      await setEscrow(e);
-      await addLog("trigger_arbitration", { escrow_id: id, caller, status: "disputed" });
-
-      // Run 3 validators (exactly as contract)
-      const [v1, v2, v3] = await Promise.all([
-        callValidator("tech", e.task_description, e.deliverable_url),
-        callValidator("req", e.task_description, e.deliverable_url),
-        callValidator("quality", e.task_description, e.deliverable_url),
-      ]);
-
-      const votes = [v1, v2, v3];
-      const verdict = majorityVote(votes);
-      const now = Date.now();
-
+      const { votes, verdict } = await runArbitration(e, false);
       e.votes = votes;
       e.final_verdict = verdict;
-      e.status = verdict as any;
-      e.resolved_at = now;
-
+      e.status = "resolved";
+      e.resolved_at = Math.floor(Date.now() / 1000);
       await setEscrow(e);
-      await addLog("arbitration_complete", { escrow_id: id, votes, verdict, resolved_at: now });
-
-      return json({ success: true, votes, final_verdict: verdict });
+      return json({ ok: true, votes, final_verdict: verdict });
     } catch (err) {
-      return json({ success: false, error: err.message }, 500);
+      return json({ error: err.message }, 500);
+    }
+  }
+
+  // ── POST /escrow/:id/claim ──
+  const mClaim = url.pathname.match(/^\/escrow\/(\d+)\/claim$/);
+  if (mClaim && req.method === "POST") {
+    try {
+      const id = Number(mClaim[1]);
+      const e = await getEscrow(id);
+      if (!e) return json({ error: "Not found" }, 404);
+      if (e.status !== "resolved") return json({ error: "Not in RESOLVED state" }, 400);
+      const now = Math.floor(Date.now() / 1000);
+      if (now <= e.resolved_at + e.dispute_window_seconds) {
+        const remaining = (e.resolved_at + e.dispute_window_seconds) - now;
+        return json({ error: `Dispute window still open (${remaining}s remaining)` }, 400);
+      }
+      const verdict = e.final_verdict;
+      if (verdict === "approved") e.status = "approved";
+      else if (verdict === "partial") e.status = "partial";
+      else e.status = "rejected";
+      await setEscrow(e);
+      return json({ ok: true, verdict });
+    } catch (err) {
+      return json({ error: err.message }, 500);
+    }
+  }
+
+  // ── POST /escrow/:id/dispute ──
+  const mDispute = url.pathname.match(/^\/escrow\/(\d+)\/dispute$/);
+  if (mDispute && req.method === "POST") {
+    try {
+      const id = Number(mDispute[1]);
+      const e = await getEscrow(id);
+      if (!e) return json({ error: "Not found" }, 404);
+      if (e.status !== "resolved") return json({ error: "Can only dispute a resolved escrow" }, 400);
+      const now = Math.floor(Date.now() / 1000);
+      if (now > e.resolved_at + e.dispute_window_seconds) {
+        return json({ error: "Dispute window has expired" }, 400);
+      }
+      e.status = "disputed";
+      await setEscrow(e);
+      return json({ ok: true });
+    } catch (err) {
+      return json({ error: err.message }, 500);
+    }
+  }
+
+  // ── POST /escrow/:id/re-resolve ──
+  const mRere = url.pathname.match(/^\/escrow\/(\d+)\/re-resolve$/);
+  if (mRere && req.method === "POST") {
+    try {
+      const id = Number(mRere[1]);
+      const e = await getEscrow(id);
+      if (!e) return json({ error: "Not found" }, 404);
+      if (e.status !== "disputed") return json({ error: "Not in DISPUTED state" }, 400);
+
+      const { votes, verdict } = await runArbitration(e, true);
+      e.votes = votes;
+      e.final_verdict = verdict;
+      e.resolved_at = Math.floor(Date.now() / 1000);
+      if (verdict === "approved") e.status = "approved";
+      else if (verdict === "partial") e.status = "partial";
+      else e.status = "rejected";
+      await setEscrow(e);
+      return json({ ok: true, votes, final_verdict: verdict });
+    } catch (err) {
+      return json({ error: err.message }, 500);
     }
   }
 
