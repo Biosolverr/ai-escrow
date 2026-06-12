@@ -1206,9 +1206,61 @@ body::after {
   </main>
 </div>
 
-<script>
-const API_BASE = 'https://ai-escrow-5qt3bpf4e3bv.biosolverr.deno.net';
-const API = window.location.hostname === 'localhost' ? 'http://localhost:8000' : API_BASE;
+<script type="module">
+// ════════════════════════════════════════════════════════════════════════════
+// GENLAYER DIRECT CONNECTION (no backend — talks straight to the chain)
+// ════════════════════════════════════════════════════════════════════════════
+import {
+  createClient,
+  createAccount,
+  generatePrivateKey,
+} from 'https://esm.sh/genlayer-js@latest';
+import { studionet } from 'https://esm.sh/genlayer-js@latest/chains';
+
+// ── CONFIG ─────────────────────────────────────────────────────────────────
+const CONTRACT_ADDRESS = '0x5895208C9699dA2CBc8F44d98d673C9Eef60230A';
+const NETWORK = studionet;
+
+// ── CLIENT / ACCOUNT SETUP ────────────────────────────────────────────────────
+let client = null;
+let account = null;
+
+async function ensureClient() {
+  if (client) return client;
+
+  if (window.ethereum) {
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    account = accounts[0];
+    client = createClient({ chain: NETWORK, account });
+  } else {
+    const pk = generatePrivateKey();
+    account = createAccount(pk);
+    client = createClient({ chain: NETWORK, account });
+  }
+  return client;
+}
+
+async function readContract(method, args = []) {
+  const c = await ensureClient();
+  return await c.readContract({
+    address: CONTRACT_ADDRESS,
+    functionName: method,
+    args,
+  });
+}
+
+async function writeContract(method, args = [], value = undefined) {
+  const c = await ensureClient();
+  const txHash = await c.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: method,
+    args,
+    value,
+  });
+  return await c.waitForTransactionReceipt({ hash: txHash, status: 'FINALIZED' });
+}
+
+function errObj(e) { return { error: e?.shortMessage || e?.message || String(e) }; }
 
 // ── NAV ──────────────────────────────────────────────────────────────────────
 function nav(name, btn) {
@@ -1228,21 +1280,6 @@ function log(id, msg, type = 'info') {
   line.innerHTML = \`<span class="t-time">\${t}</span><span class="t-\${type}">\${msg}</span>\`;
   el.appendChild(line);
   el.scrollTop = el.scrollHeight;
-}
-
-// ── API CALL ─────────────────────────────────────────────────────────────────
-async function apiCall(endpoint, body, logId) {
-  try {
-    const res = await fetch(\`\${API}\${endpoint}\`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(body)
-    });
-    return await res.json();
-  } catch(e) {
-    log(logId, \`Connection error: \${e.message}\`, 'err');
-    return null;
-  }
 }
 
 // ── VERDICT HELPERS ──────────────────────────────────────────────────────────
@@ -1295,22 +1332,26 @@ async function doCreate() {
   if (task.length < 20) { log('c_log', 'Task too short (min 20 chars)', 'err'); return; }
   if (parseInt(window_s) < 60) { log('c_log', 'Dispute window min 60 seconds', 'err'); return; }
 
-  log('c_log', 'Sending create_escrow...', 'info');
+  log('c_log', 'Sending create_escrow tx...', 'info');
 
-  const data = await apiCall('/escrow/create', {
-    freelancer, amount, task_spec: task, dispute_window_seconds: parseInt(window_s)
-  }, 'c_log');
+  try {
+    const valueWei = BigInt(Math.round(parseFloat(amount) * 1e18));
+    const receipt = await writeContract(
+      'create_escrow',
+      [freelancer, task, BigInt(window_s)],
+      valueWei
+    );
+    const escrowId = receipt.result ?? (Number(await readContract('get_total_escrows')) - 1);
 
-  if (data?.escrow_id !== undefined) {
-    log('c_log', \`Escrow #\${data.escrow_id} created · \${amount} GEN locked\`, 'ok');
+    log('c_log', \`Escrow #\${escrowId} created · \${amount} GEN locked\`, 'ok');
     log('c_log', \`Dispute window: \${window_s}s\`, 'info');
     const box = document.getElementById('c_result');
-    document.getElementById('c_result_id').textContent = '#' + data.escrow_id;
+    document.getElementById('c_result_id').textContent = '#' + escrowId;
     document.getElementById('c_result_meta').textContent = \`\${amount} GEN · Window: \${window_s}s · \${freelancer.slice(0,14)}...\`;
     box.classList.add('show');
     fetchStats();
-  } else if (data?.error) {
-    log('c_log', \`Error: \${data.error}\`, 'err');
+  } catch (e) {
+    log('c_log', \`Error: \${errObj(e).error}\`, 'err');
   }
 }
 
@@ -1322,13 +1363,12 @@ async function doSubmit() {
 
   log('s_log', \`Submitting deliverable for escrow #\${id}...\`, 'info');
 
-  const data = await apiCall(\`/escrow/\${id}/submit\`, { deliverable_url: url }, 's_log');
-
-  if (data?.ok) {
+  try {
+    await writeContract('submit_deliverable', [BigInt(id), url]);
     log('s_log', 'Deliverable submitted · Status → submitted', 'ok');
     document.getElementById('s_result').classList.add('show');
-  } else {
-    log('s_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+  } catch (e) {
+    log('s_log', \`Error: \${errObj(e).error}\`, 'err');
   }
 }
 
@@ -1345,18 +1385,20 @@ async function doResolve() {
   document.getElementById('r_verdict').classList.remove('show');
   renderAgentThinking('r');
 
-  log('r_log', \`resolve_escrow(\${id}) · 3 LLM validators...\`, 'info');
+  log('r_log', \`resolve_escrow(\${id}) · 3 LLM validators (on-chain consensus)...\`, 'info');
 
-  const data = await apiCall(\`/escrow/\${id}/resolve\`, {}, 'r_log');
+  try {
+    await writeContract('resolve_escrow', [BigInt(id)]);
+    const verdictData = await readContract('get_verdict', [BigInt(id)]);
+    const votes = verdictData.votes || [];
+    const final_verdict = verdictData.final_verdict;
 
-  if (data?.ok) {
-    const votes = data.votes || [];
     renderAgentResult('r', votes);
     votes.forEach((v,i) => log('r_log', \`Validator \${i+1} → \${v.toUpperCase()}\`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
-    log('r_log', \`Verdict: \${data.final_verdict?.toUpperCase()} · Funds frozen · Dispute window open\`, 'ok');
-    renderVerdict('r', data.final_verdict, votes);
-  } else {
-    log('r_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+    log('r_log', \`Verdict: \${final_verdict?.toUpperCase()} · Funds frozen · Dispute window open\`, 'ok');
+    renderVerdict('r', final_verdict, votes);
+  } catch (e) {
+    log('r_log', \`Error: \${errObj(e).error}\`, 'err');
     document.getElementById('r_agents').style.display = 'none';
   }
 
@@ -1371,16 +1413,16 @@ async function doClaim() {
 
   log('cl_log', \`claim_payment(\${id})...\`, 'info');
 
-  const data = await apiCall(\`/escrow/\${id}/claim\`, {}, 'cl_log');
-
-  if (data?.ok) {
-    log('cl_log', \`Payment claimed · Verdict: \${data.verdict?.toUpperCase()}\`, 'ok');
+  try {
+    const receipt = await writeContract('claim_payment', [BigInt(id)]);
+    const verdict = receipt.result;
+    log('cl_log', \`Payment claimed · Verdict: \${verdict?.toUpperCase()}\`, 'ok');
     const box = document.getElementById('cl_result');
-    document.getElementById('cl_result_verdict').textContent = data.verdict?.toUpperCase() || 'OK';
-    document.getElementById('cl_result_meta').textContent = VERDICT_CFG[data.verdict]?.payout || '';
+    document.getElementById('cl_result_verdict').textContent = verdict?.toUpperCase() || 'OK';
+    document.getElementById('cl_result_meta').textContent = VERDICT_CFG[verdict]?.payout || '';
     box.classList.add('show');
-  } else {
-    log('cl_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+  } catch (e) {
+    log('cl_log', \`Error: \${errObj(e).error}\`, 'err');
   }
 }
 
@@ -1391,13 +1433,12 @@ async function doDispute() {
 
   log('d_log', \`dispute_escrow(\${id})...\`, 'warn');
 
-  const data = await apiCall(\`/escrow/\${id}/dispute\`, {}, 'd_log');
-
-  if (data?.ok) {
+  try {
+    await writeContract('dispute_escrow', [BigInt(id)]);
     log('d_log', 'Dispute opened · Status → disputed · Funds frozen', 'ok');
     document.getElementById('d_result').classList.add('show');
-  } else {
-    log('d_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+  } catch (e) {
+    log('d_log', \`Error: \${errObj(e).error}\`, 'err');
   }
 }
 
@@ -1416,16 +1457,18 @@ async function doReresolve() {
 
   log('rr_log', \`re_resolve_escrow(\${id}) · Final arbitration...\`, 'warn');
 
-  const data = await apiCall(\`/escrow/\${id}/re-resolve\`, {}, 'rr_log');
+  try {
+    await writeContract('re_resolve_escrow', [BigInt(id)]);
+    const verdictData = await readContract('get_verdict', [BigInt(id)]);
+    const votes = verdictData.votes || [];
+    const final_verdict = verdictData.final_verdict;
 
-  if (data?.ok) {
-    const votes = data.votes || [];
     renderAgentResult('rr', votes);
     votes.forEach((v,i) => log('rr_log', \`Validator \${i+1} → \${v.toUpperCase()}\`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
-    log('rr_log', \`Final verdict: \${data.final_verdict?.toUpperCase()} · Payout executed\`, 'ok');
-    renderVerdict('rr', data.final_verdict, votes);
-  } else {
-    log('rr_log', \`Error: \${data?.error || 'unknown'}\`, 'err');
+    log('rr_log', \`Final verdict: \${final_verdict?.toUpperCase()} · Payout executed\`, 'ok');
+    renderVerdict('rr', final_verdict, votes);
+  } catch (e) {
+    log('rr_log', \`Error: \${errObj(e).error}\`, 'err');
     document.getElementById('rr_agents').style.display = 'none';
   }
 
@@ -1441,10 +1484,9 @@ async function doStatus() {
   log('st_log', \`get_escrow(\${id})...\`, 'info');
 
   try {
-    const res = await fetch(\`\${API}/escrow/\${id}\`);
-    const data = await res.json();
+    const data = await readContract('get_escrow', [BigInt(id)]);
 
-    if (data.status) {
+    if (data?.status) {
       document.getElementById('st_num').textContent = id;
       document.getElementById('st_client').textContent    = data.client || '—';
       document.getElementById('st_freelancer').textContent = data.freelancer || '—';
@@ -1456,7 +1498,7 @@ async function doStatus() {
 
       const ts = data.resolved_at;
       document.getElementById('st_resolved').textContent = ts && ts > 0
-        ? new Date(ts * 1000).toLocaleString()
+        ? new Date(Number(ts) * 1000).toLocaleString()
         : '—';
 
       const badge = document.getElementById('st_badge');
@@ -1469,23 +1511,31 @@ async function doStatus() {
       log('st_log', 'Escrow not found', 'err');
     }
   } catch(e) {
-    log('st_log', \`Error: \${e.message}\`, 'err');
+    log('st_log', \`Error: \${errObj(e).error}\`, 'err');
   }
 }
 
 // ── STATS ──────────────────────────────────────────────────────────────────
 async function fetchStats() {
   try {
-    const res = await fetch(\`\${API}/stats\`);
-    const data = await res.json();
-    if (data.total_escrows !== undefined) {
-      document.getElementById('statTotal').textContent = data.total_escrows;
-    }
+    const total = await readContract('get_total_escrows');
+    document.getElementById('statTotal').textContent = total.toString();
   } catch {}
 }
 
+// expose handlers for inline onclick="" attributes (module scope isn't global)
+window.nav = nav;
+window.doCreate = doCreate;
+window.doSubmit = doSubmit;
+window.doResolve = doResolve;
+window.doClaim = doClaim;
+window.doDispute = doDispute;
+window.doReresolve = doReresolve;
+window.doStatus = doStatus;
+
 fetchStats();
 </script>
+
 </body>
 </html>
 `;
