@@ -800,7 +800,7 @@ body::after {
       <div class="panel-head">
         <div>
           <div class="panel-title">Resolve Escrow</div>
-          <div class="panel-sub">3 LLM validators vote · Funds frozen · Dispute window opens</div>
+          <div class="panel-sub">3 LLM validators fetch &amp; evaluate deliverable · Funds frozen · Dispute window opens</div>
         </div>
         <div class="panel-num">03</div>
       </div>
@@ -1254,7 +1254,7 @@ async function doResolve() {
   document.getElementById('r_verdict').classList.remove('show');
   renderAgentThinking('r');
 
-  log('r_log', `resolve_escrow(${id}) · 3 LLM validators (on-chain consensus)...`, 'info');
+  log('r_log', `resolve_escrow(${id}) · validators fetch deliverable via gl.get_webpage() + consensus...`, 'info');
 
   try {
     const receipt = await writeContract('resolve_escrow', [BigInt(id)]);
@@ -1406,3 +1406,4 @@ fetchStats();
 </script>
 </body>
 </html>
+
