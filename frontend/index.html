@@ -1,5 +1,4 @@
-
-html_content = '''<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1079,11 +1078,11 @@ import {
   createClient,
   createAccount,
   generatePrivateKey,
-} from 'https://esm.sh/genlayer-js@latest';
-import { studionet } from 'https://esm.sh/genlayer-js@latest/chains';
+} from 'https://esm.sh/genlayer-js@latest?bundle';
+import { studionet } from 'https://esm.sh/genlayer-js@latest/chains?bundle';
 
 // ── CONFIG: EDIT THESE TWO VALUES ─────────────────────────────────────────────
-const CONTRACT_ADDRESS = '0xdD5208395Af83a6ad928affFd5Dd38E6CC07DED7';
+const CONTRACT_ADDRESS = '0xa986Aaa4C293D1E6c61552D39AD115e8e7a307AB';
 const NETWORK = studionet;
 
 // ── CLIENT / ACCOUNT SETUP ─────────────────────────────────────────────────────
@@ -1409,12 +1408,4 @@ window.doStatus = doStatus;
 fetchStats();
 </script>
 </body>
-</html>'''
-
-with open('/mnt/agents/output/index.html', 'w', encoding='utf-8') as f:
-    f.write(html_content)
-
-print(f"Файл сохранён: /mnt/agents/output/index.html")
-print(f"Размер: {len(html_content)} bytes")
-print(f"Строк: {len(html_content.splitlines())}")
-
+</html>
