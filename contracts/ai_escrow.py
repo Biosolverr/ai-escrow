@@ -76,14 +76,14 @@ class AIEscrow(gl.Contract):
     def _run_arbitration(self, task_description: str, deliverable_url: str, is_dispute: bool) -> dict:
         dispute_note = "This is a DISPUTED case — evaluate carefully.\n" if is_dispute else ""
 
-        def leader_fn():
-            # Реально читаем страницу deliverable
-            try:
-                page_content = gl.get_webpage(deliverable_url)
-                page_content = page_content[:3000] if len(page_content) > 3000 else page_content
-            except Exception:
-                page_content = "(Could not fetch page content)"
+        # Fetch page content using eq_principle_strict_eq (required by GenVM)
+        def fetch_page() -> str:
+            content = gl.get_webpage(deliverable_url, mode="text")
+            return content[:3000] if len(content) > 3000 else content
 
+        page_content = gl.eq_principle_strict_eq(fetch_page)
+
+        def leader_fn():
             prompt_template = (
                 "You are an impartial arbitrator evaluating a freelance deliverable.\n\n"
                 "TASK DESCRIPTION:\n{task}\n\n"
@@ -129,13 +129,6 @@ class AIEscrow(gl.Contract):
             if not isinstance(leaders_res, gl.vm.Return):
                 return False
             leaders_verdict = leaders_res.calldata["verdict"]
-
-            # Реально читаем страницу deliverable
-            try:
-                page_content = gl.get_webpage(deliverable_url)
-                page_content = page_content[:3000] if len(page_content) > 3000 else page_content
-            except Exception:
-                page_content = "(Could not fetch page content)"
 
             prompt_template = (
                 "You are an impartial arbitrator evaluating a freelance deliverable.\n\n"
@@ -228,7 +221,6 @@ class AIEscrow(gl.Contract):
 
     @gl.public.write
     def resolve_escrow(self, escrow_id: u256) -> str:
-        """LLM арбитраж. Деньги НЕ выплачиваются — ждём окна диспута."""
         record = self.escrows[escrow_id]
         assert record.status == EscrowStatus.SUBMITTED.value, "Deliverable not submitted"
         assert (
@@ -250,7 +242,6 @@ class AIEscrow(gl.Contract):
 
     @gl.public.write
     def dispute_escrow(self, escrow_id: u256) -> None:
-        """Открыть диспут пока окно не истекло."""
         record = self.escrows[escrow_id]
         assert (
             gl.message.sender_address == record.client
@@ -266,7 +257,6 @@ class AIEscrow(gl.Contract):
 
     @gl.public.write
     def re_resolve_escrow(self, escrow_id: u256) -> str:
-        """Повторный LLM арбитраж после диспута. Выплачивает деньги финально."""
         record = self.escrows[escrow_id]
         assert record.status == EscrowStatus.DISPUTED.value, "Escrow not in DISPUTED state"
         assert (
@@ -297,7 +287,6 @@ class AIEscrow(gl.Contract):
 
     @gl.public.write
     def claim_payment(self, escrow_id: u256) -> str:
-        """Забрать деньги после истечения окна диспута (если диспута не было)."""
         record = self.escrows[escrow_id]
         assert record.status == EscrowStatus.RESOLVED.value, "Nothing to claim"
 
