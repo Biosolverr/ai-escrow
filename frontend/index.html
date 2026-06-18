@@ -1125,7 +1125,11 @@ async function writeContract(method, args = [], value = undefined) {
     args,
     value,
   });
-  return await c.waitForTransactionReceipt({ hash: txHash, status: 'FINALIZED' });
+  return await c.waitForTransactionReceipt({ 
+    hash: txHash, 
+    status: 'FINALIZED',
+    timeout: 300000  // 5 minutes for LLM arbitration
+  });
 }
 
 // ── NAV ──────────────────────────────────────────────────────────────────────
