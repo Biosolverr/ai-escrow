@@ -79,7 +79,7 @@ class AIEscrow(gl.Contract):
         def leader_fn():
             # Реально читаем страницу deliverable
             try:
-                page_content = gl.get_webpage(deliverable_url, mode="text")
+                page_content = gl.get_webpage(deliverable_url)
                 page_content = page_content[:3000] if len(page_content) > 3000 else page_content
             except Exception:
                 page_content = "(Could not fetch page content)"
@@ -132,7 +132,7 @@ class AIEscrow(gl.Contract):
 
             # Реально читаем страницу deliverable
             try:
-                page_content = gl.get_webpage(deliverable_url, mode="text")
+                page_content = gl.get_webpage(deliverable_url)
                 page_content = page_content[:3000] if len(page_content) > 3000 else page_content
             except Exception:
                 page_content = "(Could not fetch page content)"
