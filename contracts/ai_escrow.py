@@ -14,12 +14,12 @@ from enum import Enum
 class EscrowStatus(Enum):
     PENDING = "pending"
     SUBMITTED = "submitted"
-    RESOLVED = "resolved"       # вердикт есть, окно диспута ещё открыто
-    DISPUTED = "disputed"       # диспут открыт, деньги заморожены
-    APPROVED = "approved"       # финал: фрилансер получил деньги
-    PARTIAL = "partial"         # финал: деньги поделены
-    REJECTED = "rejected"       # финал: клиент получил деньги
-    CLAIMED = "claimed"         # claim_payment вызван после окна
+    RESOLVED = "resolved"
+    DISPUTED = "disputed"
+    APPROVED = "approved"
+    PARTIAL = "partial"
+    REJECTED = "rejected"
+    CLAIMED = "claimed"
 
 
 @allow_storage
@@ -35,7 +35,7 @@ class EscrowRecord:
     final_verdict: str
     created_at: u256
     resolved_at: u256
-    dispute_window_seconds: u256   # окно диспута, задаётся при создании
+    dispute_window_seconds: u256
 
 
 class AIEscrow(gl.Contract):
@@ -77,12 +77,21 @@ class AIEscrow(gl.Contract):
         dispute_note = "This is a DISPUTED case — evaluate carefully.\n" if is_dispute else ""
 
         def leader_fn():
+            # Реально читаем страницу deliverable
+            try:
+                page_content = gl.get_webpage(deliverable_url, mode="text")
+                page_content = page_content[:3000] if len(page_content) > 3000 else page_content
+            except Exception:
+                page_content = "(Could not fetch page content)"
+
             prompt_template = (
                 "You are an impartial arbitrator evaluating a freelance deliverable.\n\n"
                 "TASK DESCRIPTION:\n{task}\n\n"
                 "DELIVERABLE URL:\n{url}\n\n"
+                "DELIVERABLE CONTENT (fetched from URL):\n{content}\n\n"
                 "{note}"
-                "Respond with exactly one word: APPROVED, PARTIAL, or REJECTED.\n"
+                "Based on the task description and the actual content of the deliverable, "
+                "respond with exactly one word: APPROVED, PARTIAL, or REJECTED.\n"
                 "- APPROVED: deliverable fully meets requirements\n"
                 "- PARTIAL: deliverable partially meets requirements\n"
                 "- REJECTED: deliverable clearly does not meet requirements\n\n"
@@ -91,7 +100,10 @@ class AIEscrow(gl.Contract):
             votes = []
             for _ in range(3):
                 prompt = prompt_template.format(
-                    task=task_description, url=deliverable_url, note=dispute_note
+                    task=task_description,
+                    url=deliverable_url,
+                    content=page_content,
+                    note=dispute_note,
                 )
                 raw = gl.nondet.exec_prompt(prompt)
                 upper = raw.strip().upper()
@@ -117,12 +129,22 @@ class AIEscrow(gl.Contract):
             if not isinstance(leaders_res, gl.vm.Return):
                 return False
             leaders_verdict = leaders_res.calldata["verdict"]
+
+            # Реально читаем страницу deliverable
+            try:
+                page_content = gl.get_webpage(deliverable_url, mode="text")
+                page_content = page_content[:3000] if len(page_content) > 3000 else page_content
+            except Exception:
+                page_content = "(Could not fetch page content)"
+
             prompt_template = (
                 "You are an impartial arbitrator evaluating a freelance deliverable.\n\n"
                 "TASK DESCRIPTION:\n{task}\n\n"
                 "DELIVERABLE URL:\n{url}\n\n"
+                "DELIVERABLE CONTENT (fetched from URL):\n{content}\n\n"
                 "{note}"
-                "Respond with exactly one word: APPROVED, PARTIAL, or REJECTED.\n"
+                "Based on the task description and the actual content of the deliverable, "
+                "respond with exactly one word: APPROVED, PARTIAL, or REJECTED.\n"
                 "- APPROVED: deliverable fully meets requirements\n"
                 "- PARTIAL: deliverable partially meets requirements\n"
                 "- REJECTED: deliverable clearly does not meet requirements\n\n"
@@ -131,7 +153,10 @@ class AIEscrow(gl.Contract):
             votes = []
             for _ in range(3):
                 prompt = prompt_template.format(
-                    task=task_description, url=deliverable_url, note=dispute_note
+                    task=task_description,
+                    url=deliverable_url,
+                    content=page_content,
+                    note=dispute_note,
                 )
                 raw = gl.nondet.exec_prompt(prompt)
                 upper = raw.strip().upper()
@@ -219,7 +244,7 @@ class AIEscrow(gl.Contract):
         record.votes = result["votes"]
         record.final_verdict = result["verdict"]
         record.resolved_at = u256(int(datetime.datetime.now().timestamp()))
-        record.status = EscrowStatus.RESOLVED.value  # деньги заморожены, окно открыто
+        record.status = EscrowStatus.RESOLVED.value
         self.escrows[escrow_id] = record
         return result["verdict"]
 
@@ -267,7 +292,7 @@ class AIEscrow(gl.Contract):
             record.status = EscrowStatus.REJECTED.value
 
         self.escrows[escrow_id] = record
-        self._payout(record, verdict)  # финальная выплата
+        self._payout(record, verdict)
         return verdict
 
     @gl.public.write
@@ -331,4 +356,3 @@ class AIEscrow(gl.Contract):
     @gl.public.view
     def get_owner(self) -> str:
         return str(self.owner)
-
