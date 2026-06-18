@@ -1070,6 +1070,15 @@ body::after {
   </main>
 </div>
 
+<script type="importmap">
+{
+  "imports": {
+    "viem": "https://esm.sh/viem@2.21.54?bundle",
+    "viem/accounts": "https://esm.sh/viem@2.21.54/accounts?bundle",
+    "viem/chains": "https://esm.sh/viem@2.21.54/chains?bundle"
+  }
+}
+</script>
 <script type="module">
 // ════════════════════════════════════════════════════════════════════════════
 // GENLAYER DIRECT CONNECTION (no backend — talks straight to the chain)
@@ -1078,8 +1087,8 @@ import {
   createClient,
   createAccount,
   generatePrivateKey,
-} from 'https://esm.sh/genlayer-js@latest?bundle';
-import { studionet } from 'https://esm.sh/genlayer-js@latest/chains?bundle';
+} from 'https://esm.sh/genlayer-js@latest?bundle&deps=viem@2.21.54';
+import { studionet } from 'https://esm.sh/genlayer-js@latest/chains?bundle&deps=viem@2.21.54';
 
 // ── CONFIG: EDIT THESE TWO VALUES ─────────────────────────────────────────────
 const CONTRACT_ADDRESS = '0xa986Aaa4C293D1E6c61552D39AD115e8e7a307AB';
