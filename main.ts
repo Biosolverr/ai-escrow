@@ -44,3 +44,6 @@ Deno.serve({ port: PORT }, async (req) => {
 
 console.log(`AI Escrow frontend serving on http://localhost:${PORT}`);
 console.log("All contract interactions go directly to the GenLayer chain.");
+console.log("Supported contract methods:");
+console.log("  Write: create_escrow, submit_deliverable, resolve_escrow, claim_payment, dispute_escrow, re_resolve_escrow");
+console.log("  View:  get_escrow, get_total_escrows, get_verdict, get_platform_fee_bps, get_owner");
