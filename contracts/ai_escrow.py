@@ -1,28 +1,20 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
-# ═══════════════════════════════════════════════════════════════
-# AI Escrow — Intelligent Contract
-# Fixes:
-# 1. gl.get_webpage() inside eq_principle_strict_eq
-# 2. No datetime.now() — dispute window tracked via block number
-# 3. Frontend talks directly to GenLayer via genlayer-js
-# ═══════════════════════════════════════════════════════════════
-
 import typing
 from genlayer import *
 from dataclasses import dataclass
 from enum import Enum
+import datetime
 
 
 class EscrowStatus(Enum):
-    PENDING    = "pending"
-    SUBMITTED  = "submitted"
-    RESOLVED   = "resolved"
-    DISPUTED   = "disputed"
-    APPROVED   = "approved"
-    PARTIAL    = "partial"
-    REJECTED   = "rejected"
-    CLAIMED    = "claimed"
+    PENDING   = "pending"
+    SUBMITTED = "submitted"
+    RESOLVED  = "resolved"
+    DISPUTED  = "disputed"
+    APPROVED  = "approved"
+    PARTIAL   = "partial"
+    REJECTED  = "rejected"
 
 
 @allow_storage
@@ -36,14 +28,12 @@ class EscrowRecord:
     status: str
     votes: DynArray[str]
     final_verdict: str
-    # dispute_deadline = block number after which dispute is no longer possible
-    # set to 0 until resolve_escrow is called
-    dispute_deadline_block: u256
-    dispute_window_blocks: u256
+    dispute_window_seconds: u256
+    resolved_at: datetime.datetime
 
 
 class AIEscrow(gl.Contract):
-    """AI Escrow — 3 LLM validators read deliverable URL + majority vote"""
+    """AI Escrow — 3 LLM validators read deliverable via gl.nondet.web.get()"""
 
     escrows: TreeMap[u256, EscrowRecord]
     escrow_counter: u256
@@ -52,59 +42,49 @@ class AIEscrow(gl.Contract):
 
     def __init__(self):
         self.escrow_counter   = u256(0)
-        self.platform_fee_bps = u256(100)  # 1%
+        self.platform_fee_bps = u256(100)
         self.owner            = gl.message.sender_address
-
-    # ── payout ───────────────────────────────────────────────────────────────
 
     def _payout(self, record: EscrowRecord, verdict: str) -> None:
         fee = (record.amount_wei * self.platform_fee_bps) // u256(10000)
         net = record.amount_wei - fee
         if verdict == "approved":
-            gl.get_contract_at(record.freelancer).emit(value=net).__receive__()
+            gl.ContractAt(record.freelancer).emit_transfer(value=net)
         elif verdict == "partial":
             half = net // u256(2)
-            gl.get_contract_at(record.freelancer).emit(value=half).__receive__()
-            gl.get_contract_at(record.client).emit(value=net - half).__receive__()
+            gl.ContractAt(record.freelancer).emit_transfer(value=half)
+            gl.ContractAt(record.client).emit_transfer(value=net - half)
         else:
-            gl.get_contract_at(record.client).emit(value=net).__receive__()
+            gl.ContractAt(record.client).emit_transfer(value=net)
         if fee > u256(0):
-            gl.get_contract_at(self.owner).emit(value=fee).__receive__()
+            gl.ContractAt(self.owner).emit_transfer(value=fee)
 
-    # ── arbitration ──────────────────────────────────────────────────────────
-
-    def _run_arbitration(
-        self, task_description: str, deliverable_url: str, is_dispute: bool
-    ) -> dict:
+    def _run_arbitration(self, task_description: str, deliverable_url: str, is_dispute: bool) -> dict:
         dispute_note = "This is a DISPUTED re-arbitration — evaluate with extra care.\n" if is_dispute else ""
 
-        # gl.get_webpage MUST be called inside eq_principle_strict_eq
-        def _fetch_page() -> str:
-            try:
-                content = gl.get_webpage(deliverable_url, mode="text")
-                return content[:4000] if len(content) > 4000 else content
-            except Exception:
+        def _fetch_content() -> str:
+            if not deliverable_url:
                 return ""
+            response = gl.nondet.web.get(deliverable_url)
+            body = response.body.decode("utf-8")
+            return body[:4000] if body else ""
 
-        page_content = gl.eq_principle_strict_eq(_fetch_page)
-
-        content_section = (
-            f"DELIVERABLE CONTENT (fetched from URL):\n{page_content}\n\n"
-            if page_content
-            else "DELIVERABLE CONTENT: (could not fetch — evaluate by URL and task alone)\n\n"
-        )
-
-        def _vote_once() -> str:
+        def _vote_once(page_content: str) -> str:
+            content_section = (
+                "DELIVERABLE CONTENT (fetched from URL):\n" + page_content + "\n\n"
+                if page_content
+                else "DELIVERABLE CONTENT: (could not fetch — evaluate by URL and task description)\n\n"
+            )
             prompt = (
                 "You are an impartial arbitrator evaluating a freelance deliverable.\n\n"
-                f"TASK DESCRIPTION:\n{task_description}\n\n"
-                f"DELIVERABLE URL:\n{deliverable_url}\n\n"
-                f"{content_section}"
-                f"{dispute_note}"
-                "Respond with exactly one word — APPROVED, PARTIAL, or REJECTED.\n"
-                "APPROVED  = fully meets requirements\n"
-                "PARTIAL   = partially meets requirements\n"
-                "REJECTED  = does not meet requirements\n\n"
+                "TASK DESCRIPTION:\n" + task_description + "\n\n"
+                "DELIVERABLE URL:\n" + deliverable_url + "\n\n"
+                + content_section
+                + dispute_note
+                + "Respond with exactly one word — APPROVED, PARTIAL, or REJECTED.\n"
+                "APPROVED = fully meets requirements\n"
+                "PARTIAL  = partially meets requirements\n"
+                "REJECTED = does not meet requirements\n\n"
                 "Verdict:"
             )
             raw = gl.nondet.exec_prompt(prompt)
@@ -118,7 +98,7 @@ class AIEscrow(gl.Contract):
         def _majority(votes: list) -> str:
             counts = {"approved": 0, "partial": 0, "rejected": 0}
             for v in votes:
-                counts[v] += 1
+                counts[v] = counts[v] + 1
             best = "partial"
             max_c = max(counts.values())
             for v, c in counts.items():
@@ -128,37 +108,30 @@ class AIEscrow(gl.Contract):
             return best
 
         def leader_fn():
-            votes = [_vote_once() for _ in range(3)]
+            page_content = _fetch_content()
+            votes = [_vote_once(page_content) for _ in range(3)]
             return {"votes": votes, "verdict": _majority(votes)}
 
         def validator_fn(leaders_res) -> bool:
             if not isinstance(leaders_res, gl.vm.Return):
                 return False
-            votes = [_vote_once() for _ in range(3)]
+            page_content = _fetch_content()
+            votes = [_vote_once(page_content) for _ in range(3)]
             return _majority(votes) == leaders_res.calldata["verdict"]
 
         return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
-    # ── write methods ─────────────────────────────────────────────────────────
-
     @gl.public.write.payable
-    def create_escrow(
-        self,
-        freelancer: str,
-        task_description: str,
-        dispute_window_blocks: u256,
-    ) -> u256:
+    def create_escrow(self, freelancer: str, task_description: str, dispute_window_seconds: u256) -> u256:
         assert gl.message.value > u256(0), "Must deposit funds"
         assert 20 <= len(task_description) <= 2000, "Invalid task description length"
-        assert dispute_window_blocks >= u256(1), "Dispute window must be at least 1 block"
+        assert dispute_window_seconds >= u256(60), "Dispute window must be at least 60 seconds"
         freelancer_addr = Address(freelancer)
         assert freelancer_addr != gl.message.sender_address, "Client and freelancer must differ"
 
         escrow_id = self.escrow_counter
         self.escrow_counter = escrow_id + u256(1)
-
-        record = gl.storage.inmem_allocate(
-            EscrowRecord,
+        record = EscrowRecord(
             gl.message.sender_address,
             freelancer_addr,
             task_description,
@@ -167,8 +140,8 @@ class AIEscrow(gl.Contract):
             EscrowStatus.PENDING.value,
             [],
             "",
-            u256(0),               # dispute_deadline_block — set on resolve
-            dispute_window_blocks, # how many blocks after resolve to allow dispute
+            dispute_window_seconds,
+            datetime.datetime.now(),
         )
         self.escrows[escrow_id] = record
         return escrow_id
@@ -193,15 +166,12 @@ class AIEscrow(gl.Contract):
             or gl.message.sender_address == self.owner
         ), "Not authorized to resolve"
 
-        result = self._run_arbitration(
-            record.task_description, record.deliverable_url, is_dispute=False
-        )
-        record.votes              = result["votes"]
-        record.final_verdict      = result["verdict"]
-        # dispute window: current block + window size
-        record.dispute_deadline_block = gl.message.value + record.dispute_window_blocks
-        record.status             = EscrowStatus.RESOLVED.value
-        self.escrows[escrow_id]   = record
+        result = self._run_arbitration(record.task_description, record.deliverable_url, is_dispute=False)
+        record.votes         = result["votes"]
+        record.final_verdict = result["verdict"]
+        record.status        = EscrowStatus.RESOLVED.value
+        record.resolved_at   = datetime.datetime.now()
+        self.escrows[escrow_id] = record
         return result["verdict"]
 
     @gl.public.write
@@ -212,6 +182,8 @@ class AIEscrow(gl.Contract):
             or gl.message.sender_address == record.freelancer
         ), "Only parties can dispute"
         assert record.status == EscrowStatus.RESOLVED.value, "Can only dispute a resolved escrow"
+        elapsed = (datetime.datetime.now() - record.resolved_at).total_seconds()
+        assert elapsed < int(record.dispute_window_seconds), "Dispute window has closed"
         record.status = EscrowStatus.DISPUTED.value
         self.escrows[escrow_id] = record
 
@@ -225,9 +197,7 @@ class AIEscrow(gl.Contract):
             or gl.message.sender_address == self.owner
         ), "Not authorized to re-resolve"
 
-        result  = self._run_arbitration(
-            record.task_description, record.deliverable_url, is_dispute=True
-        )
+        result  = self._run_arbitration(record.task_description, record.deliverable_url, is_dispute=True)
         verdict = result["verdict"]
         record.votes         = result["votes"]
         record.final_verdict = verdict
@@ -245,6 +215,8 @@ class AIEscrow(gl.Contract):
     def claim_payment(self, escrow_id: u256) -> str:
         record = self.escrows[escrow_id]
         assert record.status == EscrowStatus.RESOLVED.value, "Nothing to claim"
+        elapsed = (datetime.datetime.now() - record.resolved_at).total_seconds()
+        assert elapsed >= int(record.dispute_window_seconds), "Dispute window still open"
         verdict = record.final_verdict
         if verdict == "approved":
             record.status = EscrowStatus.APPROVED.value
@@ -256,22 +228,20 @@ class AIEscrow(gl.Contract):
         self._payout(record, verdict)
         return verdict
 
-    # ── view methods ──────────────────────────────────────────────────────────
-
     @gl.public.view
     def get_escrow(self, escrow_id: u256) -> typing.Any:
         record = self.escrows[escrow_id]
         return {
-            "client":                str(record.client),
-            "freelancer":            str(record.freelancer),
-            "task_description":      record.task_description,
-            "deliverable_url":       record.deliverable_url,
-            "amount_wei":            int(record.amount_wei),
-            "status":                record.status,
-            "votes":                 list(record.votes),
-            "final_verdict":         record.final_verdict,
-            "dispute_deadline_block": int(record.dispute_deadline_block),
-            "dispute_window_blocks": int(record.dispute_window_blocks),
+            "client":                  str(record.client),
+            "freelancer":              str(record.freelancer),
+            "task_description":        record.task_description,
+            "deliverable_url":         record.deliverable_url,
+            "amount_wei":              int(record.amount_wei),
+            "status":                  record.status,
+            "votes":                   list(record.votes),
+            "final_verdict":           record.final_verdict,
+            "dispute_window_seconds":  int(record.dispute_window_seconds),
+            "resolved_at":             record.resolved_at.isoformat(),
         }
 
     @gl.public.view
