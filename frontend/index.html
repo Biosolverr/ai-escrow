@@ -1287,13 +1287,14 @@ async function readContract(method, args = []) {
 }
 
 // ── WRITE (transaction, waits for finalization) ──────────────────────────────
-async function writeContract(method, args = [], value = undefined) {
+async function writeContract(method, args = [], value = undefined, gas = undefined) {
   const c = await ensureClient();
   const txHash = await c.writeContract({
     address: CONTRACT_ADDRESS,
     functionName: method,
     args,
     value,
+    ...(gas !== undefined ? { gas } : {}),
   });
   return await c.waitForTransactionReceipt({
     hash: txHash,
@@ -1525,7 +1526,7 @@ async function doResolve() {
   log('r_log', `resolve_escrow(${id}) · validators fetch deliverable via gl.get_webpage() + consensus...`, 'info');
 
   try {
-    const receipt = await writeContract('resolve_escrow', [BigInt(id)]);
+    const receipt = await writeContract('resolve_escrow', [BigInt(id)], undefined, 10000000n);
     const verdictData = await readContract('get_verdict', [BigInt(id)]);
     const votes = verdictData.votes || [];
     const final_verdict = verdictData.final_verdict;
@@ -1646,7 +1647,7 @@ async function doReresolve() {
   log('rr_log', `re_resolve_escrow(${id}) · Final arbitration...`, 'warn');
 
   try {
-    await writeContract('re_resolve_escrow', [BigInt(id)]);
+    await writeContract('re_resolve_escrow', [BigInt(id)], undefined, 10000000n);
     const verdictData = await readContract('get_verdict', [BigInt(id)]);
     const votes = verdictData.votes || [];
     const final_verdict = verdictData.final_verdict;
