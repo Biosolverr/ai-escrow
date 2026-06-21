@@ -663,7 +663,6 @@ body::after {
   .agents-grid { grid-template-columns: 1fr; }
 }
 </style>
-<base target="_blank">
 </head>
 <body>
 
@@ -683,6 +682,20 @@ body::after {
 
   <!-- SIDEBAR -->
   <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Active Role (no wallet)</div>
+      <button class="nav-btn" id="role_client_btn" onclick="setActiveRole('client')">
+        <span class="n-icon">👤</span> Client
+      </button>
+      <button class="nav-btn" id="role_freelancer_btn" onclick="setActiveRole('freelancer')">
+        <span class="n-icon">🛠</span> Freelancer
+      </button>
+      <div style="padding:8px 12px;font-size:10px;color:var(--gray5);line-height:1.6">
+        <div>Client: <span id="addr_client_display" style="word-break:break-all;color:var(--gray6)">—</span></div>
+        <div style="margin-top:4px">Freelancer: <span id="addr_freelancer_display" style="word-break:break-all;color:var(--gray6)">—</span></div>
+      </div>
+    </div>
+
     <div class="sidebar-section">
       <div class="sidebar-label">Actions</div>
       <button class="nav-btn active" onclick="nav('create',this)">
@@ -763,7 +776,7 @@ body::after {
 
       <div class="form-grid">
         <div class="field">
-          <label>Freelancer Address</label>
+          <label>Freelancer Address <button type="button" class="btn btn-outline" style="padding:2px 8px;font-size:10px;margin-left:6px" onclick="document.getElementById('c_freelancer').value = window.freelancerAccount.address">Use Test Freelancer</button></label>
           <input type="text" id="c_freelancer" placeholder="0x...">
         </div>
         <div class="field">
@@ -1208,22 +1221,58 @@ import { studionet } from 'genlayer/chains';
 const CONTRACT_ADDRESS = '0x48be7D7ff5dd4526ef6630c1852d96FDAAf03040';
 const NETWORK = studionet;
 
+// ── TWO TEST ACCOUNTS (no wallet needed) ────────────────────────────────────
+// Client and Freelancer are SDK-managed key pairs persisted in localStorage so
+// their addresses stay stable across reloads. Switch the active role with the
+// selector in the sidebar — every write call uses the currently active role.
+function loadOrCreateKey(storageKey) {
+  let pk = localStorage.getItem(storageKey);
+  if (!pk) {
+    pk = generatePrivateKey();
+    localStorage.setItem(storageKey, pk);
+  }
+  return pk;
+}
+
+const clientAccount     = createAccount(loadOrCreateKey('escrow_client_pk'));
+const freelancerAccount = createAccount(loadOrCreateKey('escrow_freelancer_pk'));
+
+let activeRole = localStorage.getItem('escrow_active_role') || 'client';
+
+function activeAccount() {
+  return activeRole === 'freelancer' ? freelancerAccount : clientAccount;
+}
+
+function setActiveRole(role) {
+  activeRole = role;
+  localStorage.setItem('escrow_active_role', role);
+  client = null; // force client rebuild with new account
+  updateRoleUI();
+}
+
+function updateRoleUI() {
+  const btnClient = document.getElementById('role_client_btn');
+  const btnFreelancer = document.getElementById('role_freelancer_btn');
+  const clientDisplay = document.getElementById('addr_client_display');
+  const freelancerDisplay = document.getElementById('addr_freelancer_display');
+  if (btnClient && btnFreelancer) {
+    btnClient.classList.toggle('active', activeRole === 'client');
+    btnFreelancer.classList.toggle('active', activeRole === 'freelancer');
+  }
+  if (clientDisplay) clientDisplay.textContent = clientAccount.address;
+  if (freelancerDisplay) freelancerDisplay.textContent = freelancerAccount.address;
+}
+
+window.setActiveRole = setActiveRole;
+window.clientAccount = clientAccount;
+window.freelancerAccount = freelancerAccount;
+
 // ── CLIENT / ACCOUNT SETUP ───────────────────────────────────────────────────
 let client = null;
-let account = null;
 
 async function ensureClient() {
   if (client) return client;
-
-  if (window.ethereum) {
-    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-    account = accounts[0];
-    client = createClient({ chain: NETWORK, account });
-  } else {
-    const pk = generatePrivateKey();
-    account = createAccount(pk);
-    client = createClient({ chain: NETWORK, account });
-  }
+  client = createClient({ chain: NETWORK, account: activeAccount() });
   return client;
 }
 
@@ -1725,6 +1774,7 @@ window.simClaim = simClaim;
 window.simDispute = simDispute;
 window.simReresolve = simReresolve;
 
+updateRoleUI();
 fetchStats();
 </script>
 </body>
