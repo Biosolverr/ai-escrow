@@ -1437,7 +1437,8 @@ async function doCreate() {
       [freelancer, task, BigInt(window_s)],
       valueWei
     );
-    const escrowId = receipt.result ?? (Number(await readContract('get_total_escrows')) - 1);
+    const total = await readContract('get_total_escrows');
+    const escrowId = Number(total) - 1;
 
     log('c_log', `Escrow #${escrowId} created · ${amount} GEN locked`, 'ok');
     log('c_log', `Dispute window: ${window_s}s`, 'info');
