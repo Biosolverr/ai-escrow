@@ -49,15 +49,15 @@ class AIEscrow(gl.Contract):
         fee = (record.amount_wei * self.platform_fee_bps) // u256(10000)
         net = record.amount_wei - fee
         if verdict == "approved":
-            gl.ContractAt(record.freelancer).emit_transfer(value=net)
+            gl.get_contract_at(record.freelancer).emit_transfer(value=net)
         elif verdict == "partial":
             half = net // u256(2)
-            gl.ContractAt(record.freelancer).emit_transfer(value=half)
-            gl.ContractAt(record.client).emit_transfer(value=net - half)
+            gl.get_contract_at(record.freelancer).emit_transfer(value=half)
+            gl.get_contract_at(record.client).emit_transfer(value=net - half)
         else:
-            gl.ContractAt(record.client).emit_transfer(value=net)
+            gl.get_contract_at(record.client).emit_transfer(value=net)
         if fee > u256(0):
-            gl.ContractAt(self.owner).emit_transfer(value=fee)
+            gl.get_contract_at(self.owner).emit_transfer(value=fee)
 
     def _run_arbitration(self, task_description: str, deliverable_url: str, is_dispute: bool) -> dict:
         dispute_note = "This is a DISPUTED re-arbitration — evaluate with extra care.\n" if is_dispute else ""
@@ -264,4 +264,3 @@ class AIEscrow(gl.Contract):
     @gl.public.view
     def get_owner(self) -> str:
         return str(self.owner)
-
