@@ -26,14 +26,13 @@ class EscrowRecord:
     deliverable_url: str
     amount_wei: u256
     status: str
-    votes: DynArray[str]
     final_verdict: str
     dispute_window_seconds: u256
     resolved_at: datetime.datetime
 
 
 class AIEscrow(gl.Contract):
-    """AI Escrow — 3 LLM validators read deliverable via gl.nondet.web.get()"""
+    """AI Escrow — native GenLayer validator consensus per transaction"""
 
     escrows: TreeMap[u256, EscrowRecord]
     escrow_counter: u256
@@ -59,21 +58,28 @@ class AIEscrow(gl.Contract):
         if fee > u256(0):
             gl.get_contract_at(self.owner).emit_transfer(value=fee)
 
-    def _run_arbitration(self, task_description: str, deliverable_url: str, is_dispute: bool) -> dict:
+    def _run_arbitration(self, task_description: str, deliverable_url: str, is_dispute: bool) -> str:
+        """
+        Native GenLayer consensus: each validator node independently fetches
+        the deliverable and votes once. The protocol reaches majority consensus
+        across all active validators — no manual vote counting inside the contract.
+        """
         dispute_note = "This is a DISPUTED re-arbitration — evaluate with extra care.\n" if is_dispute else ""
 
-        def _fetch_content() -> str:
-            if not deliverable_url:
-                return ""
-            response = gl.nondet.web.get(deliverable_url)
-            body = response.body.decode("utf-8")
-            return body[:4000] if body else ""
+        def leader_fn() -> dict:
+            body = ""
+            if deliverable_url:
+                try:
+                    response = gl.nondet.web.get(deliverable_url)
+                    raw = response.body.decode("utf-8")
+                    body = raw[:4000] if raw else ""
+                except Exception:
+                    body = ""
 
-        def _vote_once(page_content: str) -> str:
             content_section = (
-                "DELIVERABLE CONTENT (fetched from URL):\n" + page_content + "\n\n"
-                if page_content
-                else "DELIVERABLE CONTENT: (could not fetch — evaluate by URL and task description)\n\n"
+                "DELIVERABLE CONTENT (fetched from URL):\n" + body + "\n\n"
+                if body
+                else "DELIVERABLE CONTENT: (could not fetch — evaluate by URL and task description only)\n\n"
             )
             prompt = (
                 "You are an impartial arbitrator evaluating a freelance deliverable.\n\n"
@@ -90,36 +96,58 @@ class AIEscrow(gl.Contract):
             raw = gl.nondet.exec_prompt(prompt)
             upper = raw.strip().upper()
             if "APPROVED" in upper:
-                return "approved"
-            if "REJECTED" in upper:
-                return "rejected"
-            return "partial"
-
-        def _majority(votes: list) -> str:
-            counts = {"approved": 0, "partial": 0, "rejected": 0}
-            for v in votes:
-                counts[v] = counts[v] + 1
-            best = "partial"
-            max_c = max(counts.values())
-            for v, c in counts.items():
-                if c == max_c and max_c >= 2:
-                    best = v
-                    break
-            return best
-
-        def leader_fn():
-            page_content = _fetch_content()
-            votes = [_vote_once(page_content) for _ in range(3)]
-            return {"votes": votes, "verdict": _majority(votes)}
+                verdict = "approved"
+            elif "REJECTED" in upper:
+                verdict = "rejected"
+            else:
+                verdict = "partial"
+            return {"verdict": verdict}
 
         def validator_fn(leaders_res) -> bool:
             if not isinstance(leaders_res, gl.vm.Return):
                 return False
-            page_content = _fetch_content()
-            votes = [_vote_once(page_content) for _ in range(3)]
-            return _majority(votes) == leaders_res.calldata["verdict"]
 
-        return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+            body = ""
+            if deliverable_url:
+                try:
+                    response = gl.nondet.web.get(deliverable_url)
+                    raw = response.body.decode("utf-8")
+                    body = raw[:4000] if raw else ""
+                except Exception:
+                    body = ""
+
+            content_section = (
+                "DELIVERABLE CONTENT (fetched from URL):\n" + body + "\n\n"
+                if body
+                else "DELIVERABLE CONTENT: (could not fetch — evaluate by URL and task description only)\n\n"
+            )
+            prompt = (
+                "You are an impartial arbitrator evaluating a freelance deliverable.\n\n"
+                "TASK DESCRIPTION:\n" + task_description + "\n\n"
+                "DELIVERABLE URL:\n" + deliverable_url + "\n\n"
+                + content_section
+                + dispute_note
+                + "Respond with exactly one word — APPROVED, PARTIAL, or REJECTED.\n"
+                "APPROVED = fully meets requirements\n"
+                "PARTIAL  = partially meets requirements\n"
+                "REJECTED = does not meet requirements\n\n"
+                "Verdict:"
+            )
+            raw = gl.nondet.exec_prompt(prompt)
+            upper = raw.strip().upper()
+            if "APPROVED" in upper:
+                my_verdict = "approved"
+            elif "REJECTED" in upper:
+                my_verdict = "rejected"
+            else:
+                my_verdict = "partial"
+
+            return my_verdict == leaders_res.calldata["verdict"]
+
+        result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        return result["verdict"]
+
+    # ── WRITE METHODS ────────────────────────────────────────────────────────
 
     @gl.public.write.payable
     def create_escrow(self, freelancer: str, task_description: str, dispute_window_seconds: u256) -> u256:
@@ -132,16 +160,15 @@ class AIEscrow(gl.Contract):
         escrow_id = self.escrow_counter
         self.escrow_counter = escrow_id + u256(1)
         record = EscrowRecord(
-            gl.message.sender_address,
-            freelancer_addr,
-            task_description,
-            "",
-            gl.message.value,
-            EscrowStatus.PENDING.value,
-            [],
-            "",
-            dispute_window_seconds,
-            datetime.datetime.now(),
+            client=gl.message.sender_address,
+            freelancer=freelancer_addr,
+            task_description=task_description,
+            deliverable_url="",
+            amount_wei=gl.message.value,
+            status=EscrowStatus.PENDING.value,
+            final_verdict="",
+            dispute_window_seconds=dispute_window_seconds,
+            resolved_at=datetime.datetime.now(),
         )
         self.escrows[escrow_id] = record
         return escrow_id
@@ -166,13 +193,12 @@ class AIEscrow(gl.Contract):
             or gl.message.sender_address == self.owner
         ), "Not authorized to resolve"
 
-        result = self._run_arbitration(record.task_description, record.deliverable_url, is_dispute=False)
-        record.votes         = result["votes"]
-        record.final_verdict = result["verdict"]
+        verdict = self._run_arbitration(record.task_description, record.deliverable_url, is_dispute=False)
+        record.final_verdict = verdict
         record.status        = EscrowStatus.RESOLVED.value
         record.resolved_at   = datetime.datetime.now()
         self.escrows[escrow_id] = record
-        return result["verdict"]
+        return verdict
 
     @gl.public.write
     def dispute_escrow(self, escrow_id: u256) -> None:
@@ -197,9 +223,7 @@ class AIEscrow(gl.Contract):
             or gl.message.sender_address == self.owner
         ), "Not authorized to re-resolve"
 
-        result  = self._run_arbitration(record.task_description, record.deliverable_url, is_dispute=True)
-        verdict = result["verdict"]
-        record.votes         = result["votes"]
+        verdict = self._run_arbitration(record.task_description, record.deliverable_url, is_dispute=True)
         record.final_verdict = verdict
         if verdict == "approved":
             record.status = EscrowStatus.APPROVED.value
@@ -228,6 +252,8 @@ class AIEscrow(gl.Contract):
         self._payout(record, verdict)
         return verdict
 
+    # ── VIEW METHODS ─────────────────────────────────────────────────────────
+
     @gl.public.view
     def get_escrow(self, escrow_id: u256) -> typing.Any:
         record = self.escrows[escrow_id]
@@ -238,24 +264,22 @@ class AIEscrow(gl.Contract):
             "deliverable_url":         record.deliverable_url,
             "amount_wei":              int(record.amount_wei),
             "status":                  record.status,
-            "votes":                   list(record.votes),
             "final_verdict":           record.final_verdict,
             "dispute_window_seconds":  int(record.dispute_window_seconds),
             "resolved_at":             record.resolved_at.isoformat(),
         }
 
     @gl.public.view
-    def get_total_escrows(self) -> u256:
-        return self.escrow_counter
-
-    @gl.public.view
     def get_verdict(self, escrow_id: u256) -> typing.Any:
         record = self.escrows[escrow_id]
         return {
-            "votes":         list(record.votes),
             "final_verdict": record.final_verdict,
             "status":        record.status,
         }
+
+    @gl.public.view
+    def get_total_escrows(self) -> u256:
+        return self.escrow_counter
 
     @gl.public.view
     def get_platform_fee_bps(self) -> u256:
