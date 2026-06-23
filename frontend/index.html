@@ -108,11 +108,6 @@ body::after {
   gap: 6px;
 }
 
-.tag.consensus {
-  border-color: var(--blue);
-  color: var(--blue);
-}
-
 .dot {
   width: 5px; height: 5px;
   border-radius: 50%;
@@ -251,6 +246,7 @@ body::after {
   margin-bottom: 20px;
 }
 
+.form-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 .form-grid.cols-1 { grid-template-columns: 1fr; }
 
 .field { display: flex; flex-direction: column; gap: 8px; }
@@ -264,7 +260,8 @@ body::after {
 }
 
 .field input,
-.field textarea {
+.field textarea,
+.field select {
   background: var(--gray1);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -278,7 +275,9 @@ body::after {
 }
 
 .field input:focus,
-.field textarea:focus { border-color: var(--gray4); }
+.field textarea:focus {
+  border-color: var(--gray4);
+}
 
 .field textarea { resize: vertical; min-height: 90px; }
 
@@ -340,6 +339,12 @@ body::after {
 
 .btn-row { display: flex; gap: 12px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 32px 0;
+}
+
 .result-box {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -351,9 +356,11 @@ body::after {
 }
 
 .result-box.show { display: block; }
+
 .result-box.ok    { border-color: #2a4020; background: #0a1208; }
 .result-box.err   { border-color: #402020; background: #120808; }
 .result-box.warn  { border-color: #403010; background: #120e04; }
+.result-box.info  { border-color: #1a3040; background: #080e14; }
 
 .result-label {
   font-size: 9px;
@@ -375,8 +382,12 @@ body::after {
 .result-id.ok   { color: var(--green); }
 .result-id.err  { color: var(--red); }
 .result-id.warn { color: var(--amber); }
+.result-id.info { color: var(--blue); }
 
-.result-meta { font-size: 11px; color: var(--gray5); }
+.result-meta {
+  font-size: 11px;
+  color: var(--gray5);
+}
 
 .sim-box {
   border: 1px dashed var(--gray3);
@@ -410,7 +421,6 @@ body::after {
   word-break: break-word;
 }
 
-/* ── VERDICT ─────────────────────────────────────────────────────────────── */
 .verdict-wrap {
   display: none;
   margin-top: 28px;
@@ -425,6 +435,7 @@ body::after {
   display: flex;
   align-items: center;
   gap: 32px;
+  margin-bottom: 16px;
 }
 
 .verdict-banner.approved { background: #0d1a06; border: 1px solid #2a4010; }
@@ -433,6 +444,7 @@ body::after {
 
 .verdict-icon { font-size: 40px; flex-shrink: 0; }
 
+.verdict-text-wrap {}
 .verdict-verdict {
   font-family: var(--display);
   font-size: 28px;
@@ -448,23 +460,27 @@ body::after {
 
 .verdict-payout { font-size: 12px; color: var(--gray5); }
 
-/* consensus note below verdict */
-.consensus-note {
-  margin-top: 12px;
-  padding: 10px 14px;
-  border: 1px solid var(--gray3);
-  border-radius: 4px;
-  font-size: 10px;
-  color: var(--gray5);
-  letter-spacing: 0.04em;
+.votes-strip {
   display: flex;
-  align-items: center;
   gap: 8px;
 }
 
-.consensus-note::before { content: "◉"; color: var(--blue); font-size: 12px; }
+.vote-pill {
+  flex: 1;
+  padding: 10px 0;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+  border: 1px solid;
+}
 
-/* ── STATUS CARD ─────────────────────────────────────────────────────────── */
+.vote-pill.approved { background: #0d1a06; border-color: #2a4010; color: var(--green); }
+.vote-pill.partial  { background: #1a1206; border-color: #403010; color: var(--amber); }
+.vote-pill.rejected { background: #1a0606; border-color: #401010; color: var(--red); }
+
 .status-card {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -502,16 +518,18 @@ body::after {
 }
 
 .status-badge.pending   { border-color: #443020; color: var(--amber); background: #1a1008; }
-.status-badge.submitted { border-color: #203040; color: var(--blue);  background: #081018; }
+.status-badge.submitted { border-color: #203040; color: var(--blue); background: #081018; }
 .status-badge.resolved  { border-color: #303030; color: var(--gray6); background: var(--gray1); }
 .status-badge.disputed  { border-color: #443020; color: var(--amber); background: #1a1008; }
 .status-badge.approved  { border-color: #2a4010; color: var(--green); background: #0d1a06; }
 .status-badge.partial   { border-color: #403010; color: var(--amber); background: #1a1206; }
-.status-badge.rejected  { border-color: #401010; color: var(--red);   background: #1a0606; }
+.status-badge.rejected  { border-color: #401010; color: var(--red); background: #1a0606; }
+.status-badge.claimed   { border-color: #2a4010; color: var(--green); background: #0d1a06; }
 
 .status-card-body {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 0;
 }
 
 .status-field {
@@ -537,69 +555,6 @@ body::after {
   word-break: break-all;
 }
 
-.info-row {
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 20px;
-}
-
-.info-cell {
-  flex: 1;
-  padding: 12px 16px;
-  border-right: 1px solid var(--border);
-}
-
-.info-cell:last-child { border-right: none; }
-.info-key { font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gray4); margin-bottom: 4px; }
-.info-val { font-size: 12px; color: var(--gray6); }
-
-/* ── ARBITRATION PROGRESS ────────────────────────────────────────────────── */
-.arb-progress {
-  display: none;
-  margin: 20px 0;
-  border: 1px solid var(--gray3);
-  border-radius: 6px;
-  padding: 20px 24px;
-  animation: fadeIn 0.3s ease;
-}
-
-.arb-progress.show { display: block; }
-
-.arb-progress-label {
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--blue);
-  margin-bottom: 14px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.arb-bar-track {
-  height: 2px;
-  background: var(--gray3);
-  border-radius: 1px;
-  overflow: hidden;
-  margin-bottom: 10px;
-}
-
-.arb-bar-fill {
-  height: 100%;
-  background: var(--blue);
-  border-radius: 1px;
-  width: 0%;
-  transition: width 0.4s ease;
-}
-
-.arb-status {
-  font-size: 11px;
-  color: var(--gray5);
-}
-
-/* ── TERMINAL ────────────────────────────────────────────────────────────── */
 .terminal {
   background: var(--black);
   border: 1px solid var(--border);
@@ -634,6 +589,68 @@ body::after {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.agent-tile {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  text-align: center;
+  background: var(--gray1);
+  transition: border-color 0.3s, background 0.3s;
+}
+
+.agent-tile.thinking { border-color: var(--gray4); background: #111; }
+.agent-tile.v-approved { border-color: #2a4010; background: #0d1a06; }
+.agent-tile.v-partial  { border-color: #403010; background: #1a1206; }
+.agent-tile.v-rejected { border-color: #401010; background: #1a0606; }
+
+.agent-num {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--gray3);
+  margin-bottom: 6px;
+}
+
+.agent-tile.thinking .agent-num { color: var(--gray5); }
+
+.agent-result {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--gray4);
+}
+
+.agent-tile.v-approved .agent-result { color: var(--green); }
+.agent-tile.v-partial  .agent-result { color: var(--amber); }
+.agent-tile.v-rejected .agent-result { color: var(--red); }
+
+.info-row {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.info-cell {
+  flex: 1;
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
+}
+
+.info-cell:last-child { border-right: none; }
+.info-key { font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gray4); margin-bottom: 4px; }
+.info-val { font-size: 12px; color: var(--gray6); font-family: var(--mono); }
+
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: var(--black); }
 ::-webkit-scrollbar-thumb { background: var(--gray3); border-radius: 2px; }
@@ -643,6 +660,7 @@ body::after {
   .sidebar { display: none; }
   .panel { padding: 24px 20px; }
   .form-grid { grid-template-columns: 1fr; }
+  .agents-grid { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -658,27 +676,12 @@ body::after {
     </div>
     <div class="header-right">
       <span class="tag">GenLayer</span>
-      <span class="tag consensus">Native Consensus</span>
       <span class="tag live"><span class="dot"></span>Studionet</span>
     </div>
   </header>
 
   <!-- SIDEBAR -->
   <aside class="sidebar">
-    <div class="sidebar-section">
-      <div class="sidebar-label">Active Role (no wallet)</div>
-      <button class="nav-btn" id="role_client_btn" onclick="setActiveRole('client')">
-        <span class="n-icon">👤</span> Client
-      </button>
-      <button class="nav-btn" id="role_freelancer_btn" onclick="setActiveRole('freelancer')">
-        <span class="n-icon">🛠</span> Freelancer
-      </button>
-      <div style="padding:8px 12px;font-size:10px;color:var(--gray5);line-height:1.6">
-        <div>Client: <span id="addr_client_display" style="word-break:break-all;color:var(--gray6)">—</span></div>
-        <div style="margin-top:4px">Freelancer: <span id="addr_freelancer_display" style="word-break:break-all;color:var(--gray6)">—</span></div>
-      </div>
-    </div>
-
     <div class="sidebar-section">
       <div class="sidebar-label">Actions</div>
       <button class="nav-btn active" onclick="nav('create',this)">
@@ -730,8 +733,8 @@ body::after {
         <span class="stat-val" id="statTotal">—</span>
       </div>
       <div class="stat-row">
-        <span class="stat-key">Consensus</span>
-        <span class="stat-val" style="font-size:10px;color:var(--blue)">Native</span>
+        <span class="stat-key">Validators</span>
+        <span class="stat-val">3</span>
       </div>
       <div class="stat-row">
         <span class="stat-key">Fee</span>
@@ -759,22 +762,17 @@ body::after {
 
       <div class="form-grid">
         <div class="field">
-          <label>Freelancer Address
-            <button type="button" class="btn btn-outline" style="padding:2px 8px;font-size:10px;margin-left:6px"
-              onclick="document.getElementById('c_freelancer').value = window.freelancerAccount.address">
-              Use Test Freelancer
-            </button>
-          </label>
+          <label>Freelancer Address</label>
           <input type="text" id="c_freelancer" placeholder="0x...">
         </div>
         <div class="field">
           <label>Dispute Window (seconds)</label>
           <input type="number" id="c_window" placeholder="300" min="60">
-          <span class="field-hint">Min 60s · 300 = 5 min · 86400 = 1 day</span>
+          <span class="field-hint">Min 60s · e.g. 300 = 5 min · 86400 = 1 day</span>
         </div>
         <div class="field full">
           <label>Task Description</label>
-          <textarea id="c_task" placeholder="Describe the deliverable precisely. Min 20 chars. Each validator node will independently evaluate this."></textarea>
+          <textarea id="c_task" placeholder="Describe the deliverable precisely. Min 20 chars. The AI validators will use this to evaluate the work."></textarea>
         </div>
         <div class="field">
           <label>Amount (GEN)</label>
@@ -793,7 +791,7 @@ body::after {
         <div class="sim-body" id="c_simbody">—</div>
       </div>
 
-      <div class="result-box ok" id="c_result">
+      <div class="result-box" id="c_result">
         <div class="result-label">Escrow Created</div>
         <div class="result-id ok" id="c_result_id">#0</div>
         <div class="result-meta" id="c_result_meta"></div>
@@ -833,7 +831,7 @@ body::after {
         <div class="sim-body" id="s_simbody">—</div>
       </div>
 
-      <div class="result-box ok" id="s_result">
+      <div class="result-box" id="s_result">
         <div class="result-label">Submitted</div>
         <div class="result-id ok">OK</div>
         <div class="result-meta">Status updated to submitted</div>
@@ -847,7 +845,7 @@ body::after {
       <div class="panel-head">
         <div>
           <div class="panel-title">Resolve Escrow</div>
-          <div class="panel-sub">Each validator node independently fetches &amp; evaluates · Protocol reaches consensus</div>
+          <div class="panel-sub">3 LLM validators fetch &amp; evaluate deliverable · Funds frozen · Dispute window opens</div>
         </div>
         <div class="panel-num">03</div>
       </div>
@@ -860,14 +858,19 @@ body::after {
         </div>
       </div>
 
-      <div class="arb-progress" id="r_arb">
-        <div class="arb-progress-label">
-          <span class="spin"></span> Validator consensus in progress
+      <div class="agents-grid" id="r_agents" style="display:none">
+        <div class="agent-tile" id="r_a1">
+          <div class="agent-num">01</div>
+          <div class="agent-result" id="r_a1v">WAITING</div>
         </div>
-        <div class="arb-bar-track">
-          <div class="arb-bar-fill" id="r_bar"></div>
+        <div class="agent-tile" id="r_a2">
+          <div class="agent-num">02</div>
+          <div class="agent-result" id="r_a2v">WAITING</div>
         </div>
-        <div class="arb-status" id="r_arb_status">Waiting for finalization...</div>
+        <div class="agent-tile" id="r_a3">
+          <div class="agent-num">03</div>
+          <div class="agent-result" id="r_a3v">WAITING</div>
+        </div>
       </div>
 
       <div class="btn-row">
@@ -883,12 +886,12 @@ body::after {
       <div class="verdict-wrap" id="r_verdict">
         <div class="verdict-banner" id="r_vbanner">
           <div class="verdict-icon" id="r_vicon"></div>
-          <div>
+          <div class="verdict-text-wrap">
             <div class="verdict-verdict" id="r_vlabel"></div>
             <div class="verdict-payout" id="r_vpayout"></div>
           </div>
         </div>
-        <div class="consensus-note" id="r_cnote"></div>
+        <div class="votes-strip" id="r_votes"></div>
       </div>
 
       <div class="terminal" id="r_log"></div>
@@ -907,11 +910,11 @@ body::after {
       <div class="info-row">
         <div class="info-cell">
           <div class="info-key">When to call</div>
-          <div class="info-val">After dispute_window_seconds from resolved_at</div>
+          <div class="info-val">After dispute_window_seconds passes from resolved_at</div>
         </div>
         <div class="info-cell">
           <div class="info-key">Who can call</div>
-          <div class="info-val">Anyone — funds go to winner automatically</div>
+          <div class="info-val">Anyone (winner auto-receives funds)</div>
         </div>
         <div class="info-cell">
           <div class="info-key">Required status</div>
@@ -936,7 +939,7 @@ body::after {
         <div class="sim-body" id="cl_simbody">—</div>
       </div>
 
-      <div class="result-box ok" id="cl_result">
+      <div class="result-box" id="cl_result">
         <div class="result-label">Payment Claimed</div>
         <div class="result-id ok" id="cl_result_verdict">—</div>
         <div class="result-meta" id="cl_result_meta"></div>
@@ -974,7 +977,7 @@ body::after {
         <div class="field">
           <label>Escrow ID</label>
           <input type="number" id="d_id" placeholder="0" min="0">
-          <span class="field-hint">Switch role to client or freelancer before calling</span>
+          <span class="field-hint">Switch wallet to client or freelancer before calling</span>
         </div>
       </div>
 
@@ -988,10 +991,10 @@ body::after {
         <div class="sim-body" id="d_simbody">—</div>
       </div>
 
-      <div class="result-box warn" id="d_result">
+      <div class="result-box" id="d_result">
         <div class="result-label">Dispute Opened</div>
         <div class="result-id warn">DISPUTED</div>
-        <div class="result-meta">Funds remain frozen · Call Re-Resolve next</div>
+        <div class="result-meta">Status updated · Funds remain frozen · Call Re-Resolve next</div>
       </div>
 
       <div class="terminal" id="d_log"></div>
@@ -1002,7 +1005,7 @@ body::after {
       <div class="panel-head">
         <div>
           <div class="panel-title">Re-Resolve</div>
-          <div class="panel-sub">Second consensus round · Final — payout executed automatically</div>
+          <div class="panel-sub">Second LLM arbitration · Final payout executed automatically</div>
         </div>
         <div class="panel-num">06</div>
       </div>
@@ -1029,14 +1032,19 @@ body::after {
         </div>
       </div>
 
-      <div class="arb-progress" id="rr_arb">
-        <div class="arb-progress-label">
-          <span class="spin"></span> Final consensus in progress
+      <div class="agents-grid" id="rr_agents" style="display:none">
+        <div class="agent-tile" id="rr_a1">
+          <div class="agent-num">01</div>
+          <div class="agent-result" id="rr_a1v">WAITING</div>
         </div>
-        <div class="arb-bar-track">
-          <div class="arb-bar-fill" id="rr_bar"></div>
+        <div class="agent-tile" id="rr_a2">
+          <div class="agent-num">02</div>
+          <div class="agent-result" id="rr_a2v">WAITING</div>
         </div>
-        <div class="arb-status" id="rr_arb_status">Waiting for finalization...</div>
+        <div class="agent-tile" id="rr_a3">
+          <div class="agent-num">03</div>
+          <div class="agent-result" id="rr_a3v">WAITING</div>
+        </div>
       </div>
 
       <div class="btn-row">
@@ -1052,12 +1060,12 @@ body::after {
       <div class="verdict-wrap" id="rr_verdict">
         <div class="verdict-banner" id="rr_vbanner">
           <div class="verdict-icon" id="rr_vicon"></div>
-          <div>
+          <div class="verdict-text-wrap">
             <div class="verdict-verdict" id="rr_vlabel"></div>
             <div class="verdict-payout" id="rr_vpayout"></div>
           </div>
         </div>
-        <div class="consensus-note" id="rr_cnote"></div>
+        <div class="votes-strip" id="rr_votes"></div>
       </div>
 
       <div class="terminal" id="rr_log"></div>
@@ -1103,20 +1111,24 @@ body::after {
             <div class="status-field-val" id="st_amount">—</div>
           </div>
           <div class="status-field">
-            <div class="status-field-key">Dispute Window</div>
-            <div class="status-field-val" id="st_window">—</div>
+            <div class="status-field-key">Task Description</div>
+            <div class="status-field-val" id="st_task" style="font-size:11px;max-height:80px;overflow-y:auto">—</div>
           </div>
           <div class="status-field">
             <div class="status-field-key">Final Verdict</div>
             <div class="status-field-val" id="st_verdict">—</div>
           </div>
           <div class="status-field">
+            <div class="status-field-key">Votes</div>
+            <div class="status-field-val" id="st_votes">—</div>
+          </div>
+          <div class="status-field">
             <div class="status-field-key">Deliverable URL</div>
             <div class="status-field-val" id="st_url" style="word-break:break-all">—</div>
           </div>
-          <div class="status-field" style="grid-column:1/-1;border-bottom:none">
-            <div class="status-field-key">Task Description</div>
-            <div class="status-field-val" id="st_task" style="font-size:11px;max-height:80px;overflow-y:auto">—</div>
+          <div class="status-field">
+            <div class="status-field-key">Dispute Window</div>
+            <div class="status-field-val" id="st_window">—</div>
           </div>
         </div>
       </div>
@@ -1129,7 +1141,7 @@ body::after {
       <div class="panel-head">
         <div>
           <div class="panel-title">Contract Info</div>
-          <div class="panel-sub">Read-only view · Owner · Fee · Total Escrows</div>
+          <div class="panel-sub">Read-only view methods · Owner · Fee · Total Escrows</div>
         </div>
         <div class="panel-num">08</div>
       </div>
@@ -1142,7 +1154,7 @@ body::after {
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-outline" onclick="doContractInfo()">Refresh</button>
+        <button class="btn btn-outline" onclick="doContractInfo()">Refresh Contract Info</button>
       </div>
 
       <div class="status-card" id="ci_card" style="display:block;margin-top:24px">
@@ -1185,85 +1197,78 @@ body::after {
 }
 </script>
 <script type="module">
+// ════════════════════════════════════════════════════════════════════════════
+// GENLAYER DIRECT CONNECTION — ALL CONTRACT METHODS (Write + View + Simulate)
+// ════════════════════════════════════════════════════════════════════════════
 import { createClient, createAccount, generatePrivateKey } from 'genlayer';
 import { studionet } from 'genlayer/chains';
 
 // ── CONFIG ───────────────────────────────────────────────────────────────────
-const CONTRACT_ADDRESS = '0xee0433c8b3FDa065012Bb418d231599FDB636Df5';
+const CONTRACT_ADDRESS = '0x48be7D7ff5dd4526ef6630c1852d96FDAAf03040';
 const NETWORK = studionet;
 
-// ── ACCOUNTS ─────────────────────────────────────────────────────────────────
-function loadOrCreateKey(key) {
-  let pk = localStorage.getItem(key);
-  if (!pk) { pk = generatePrivateKey(); localStorage.setItem(key, pk); }
-  return pk;
-}
-
-const clientAccount     = createAccount(loadOrCreateKey('escrow_client_pk'));
-const freelancerAccount = createAccount(loadOrCreateKey('escrow_freelancer_pk'));
-let activeRole = localStorage.getItem('escrow_active_role') || 'client';
+// ── CLIENT / ACCOUNT SETUP ───────────────────────────────────────────────────
 let client = null;
+let account = null;
 
-function activeAccount() {
-  return activeRole === 'freelancer' ? freelancerAccount : clientAccount;
-}
-
-function setActiveRole(role) {
-  activeRole = role;
-  localStorage.setItem('escrow_active_role', role);
-  client = null;
-  updateRoleUI();
-}
-
-function updateRoleUI() {
-  document.getElementById('role_client_btn').classList.toggle('active', activeRole === 'client');
-  document.getElementById('role_freelancer_btn').classList.toggle('active', activeRole === 'freelancer');
-  document.getElementById('addr_client_display').textContent = clientAccount.address;
-  document.getElementById('addr_freelancer_display').textContent = freelancerAccount.address;
-}
-
-window.setActiveRole = setActiveRole;
-window.clientAccount = clientAccount;
-window.freelancerAccount = freelancerAccount;
-
-// ── CLIENT ───────────────────────────────────────────────────────────────────
 async function ensureClient() {
   if (client) return client;
-  client = createClient({ chain: NETWORK, account: activeAccount() });
+
+  if (window.ethereum) {
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    account = accounts[0];
+    client = createClient({ chain: NETWORK, account });
+  } else {
+    const pk = generatePrivateKey();
+    account = createAccount(pk);
+    client = createClient({ chain: NETWORK, account });
+  }
   return client;
 }
 
+// ── READ (view) ──────────────────────────────────────────────────────────────
 async function readContract(method, args = []) {
   const c = await ensureClient();
-  return await c.readContract({ address: CONTRACT_ADDRESS, functionName: method, args });
+  return await c.readContract({
+    address: CONTRACT_ADDRESS,
+    functionName: method,
+    args,
+  });
 }
 
-async function writeContract(method, args = [], value = undefined, gas = undefined) {
+// ── WRITE (transaction, waits for finalization) ──────────────────────────────
+async function writeContract(method, args = [], value = undefined) {
   const c = await ensureClient();
   const txHash = await c.writeContract({
     address: CONTRACT_ADDRESS,
     functionName: method,
     args,
     value,
-    ...(gas !== undefined ? { gas } : {}),
   });
   return await c.waitForTransactionReceipt({
     hash: txHash,
     status: 'FINALIZED',
     retries: 200,
-    interval: 10000,
+    interval: 10000
   });
 }
 
+// ── SIMULATE (dry-run, no state change, no fees) ─────────────────────────────
 async function simulateContract(method, args = [], value = undefined) {
   const c = await ensureClient();
-  return await c.simulateWriteContract({
-    address: CONTRACT_ADDRESS,
-    functionName: method,
-    args,
-    value,
-    includeReceipt: true,
-  });
+  try {
+    const result = await c.simulateWriteContract({
+      address: CONTRACT_ADDRESS,
+      functionName: method,
+      args,
+      value,
+      includeReceipt: true,
+    });
+    return result;
+  } catch (e) {
+    // Some versions may not support simulateWriteContract — fallback to read-like approach
+    throw e;
+  }
 }
 
 // ── NAV ──────────────────────────────────────────────────────────────────────
@@ -1278,7 +1283,7 @@ function nav(name, btn) {
 function log(id, msg, type = 'info') {
   const el = document.getElementById(id);
   el.classList.add('show');
-  const t = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const t = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const line = document.createElement('div');
   line.className = 't-line';
   line.innerHTML = `<span class="t-time">${t}</span><span class="t-${type}">${msg}</span>`;
@@ -1286,78 +1291,79 @@ function log(id, msg, type = 'info') {
   el.scrollTop = el.scrollHeight;
 }
 
+// ── helper: turn errors into {error:...} shape ───────────────────────────────
 function errObj(e) { return { error: e?.shortMessage || e?.message || String(e) }; }
 
-// ── SIM ───────────────────────────────────────────────────────────────────────
+// ── SIMULATION RENDERER ──────────────────────────────────────────────────────
 function showSim(prefix, data) {
-  const box  = document.getElementById(prefix + '_simbox');
+  const box = document.getElementById(prefix + '_simbox');
   const body = document.getElementById(prefix + '_simbody');
   if (data?.error) {
     body.textContent = `SIMULATION ERROR\n${data.error}`;
     box.classList.add('show');
     return;
   }
+  // Pretty-print simulation result
   let text = '';
-  if (data?.receipt?.txExecutionResultName) text += `Execution: ${data.receipt.txExecutionResultName}\n`;
-  if (data?.receipt?.result) text += `Result: ${JSON.stringify(data.receipt.result, null, 2)}\n`;
-  if (data?.feeAccounting) text += `\nFee Estimate:\n${JSON.stringify(data.feeAccounting, null, 2)}`;
-  body.textContent = text || JSON.stringify(data, null, 2) || 'Simulation OK (no output)';
+  if (data?.receipt?.txExecutionResultName) {
+    text += `Execution: ${data.receipt.txExecutionResultName}\n`;
+  }
+  if (data?.receipt?.result) {
+    text += `Result: ${JSON.stringify(data.receipt.result, null, 2)}\n`;
+  }
+  if (data?.feeAccounting) {
+    text += `\nFee Estimate:\n${JSON.stringify(data.feeAccounting, null, 2)}`;
+  }
+  if (!text) {
+    text = JSON.stringify(data, null, 2);
+  }
+  body.textContent = text || 'Simulation completed successfully (no output)';
   box.classList.add('show');
 }
 
-// ── VERDICT ──────────────────────────────────────────────────────────────────
+function hideSim(prefix) {
+  document.getElementById(prefix + '_simbox').classList.remove('show');
+}
+
+// ── VERDICT HELPERS ──────────────────────────────────────────────────────────
 const VERDICT_CFG = {
-  approved: { icon: '✓', label: 'APPROVED', payout: 'Full payment → Freelancer', cls: 'approved' },
-  partial:  { icon: '◑', label: 'PARTIAL',  payout: '50% Freelancer · 50% Client', cls: 'partial' },
-  rejected: { icon: '✕', label: 'REJECTED', payout: 'Full refund → Client', cls: 'rejected' },
+  approved: { icon:'✓', label:'APPROVED', payout:'Full payment → Freelancer', cls:'approved' },
+  partial:  { icon:'◑', label:'PARTIAL',  payout:'50% Freelancer · 50% Client', cls:'partial' },
+  rejected: { icon:'✕', label:'REJECTED', payout:'Full refund → Client', cls:'rejected' },
 };
 
-function renderVerdict(prefix, verdict, note) {
-  const cfg    = VERDICT_CFG[verdict] || VERDICT_CFG.partial;
+function renderVerdict(prefix, verdict, votes) {
+  const cfg = VERDICT_CFG[verdict] || VERDICT_CFG.partial;
+  const wrap = document.getElementById(prefix + '_verdict');
   const banner = document.getElementById(prefix + '_vbanner');
   banner.className = `verdict-banner ${cfg.cls}`;
-  document.getElementById(prefix + '_vicon').textContent   = cfg.icon;
-  document.getElementById(prefix + '_vlabel').textContent  = cfg.label;
+  document.getElementById(prefix + '_vicon').textContent = cfg.icon;
+  document.getElementById(prefix + '_vlabel').textContent = cfg.label;
   document.getElementById(prefix + '_vpayout').textContent = cfg.payout;
-  document.getElementById(prefix + '_cnote').textContent   = note || 'Consensus reached via GenLayer validator network';
-  document.getElementById(prefix + '_verdict').classList.add('show');
+  const vRow = document.getElementById(prefix + '_votes');
+  vRow.innerHTML = (votes || []).map((v,i) =>
+    `<div class="vote-pill ${v}">Agent ${i+1}: ${v.toUpperCase()}</div>`
+  ).join('');
+  wrap.classList.add('show');
 }
 
-// ── PROGRESS BAR ─────────────────────────────────────────────────────────────
-function startProgress(prefix) {
-  document.getElementById(prefix + '_arb').classList.add('show');
-  let pct = 0;
-  const bar = document.getElementById(prefix + '_bar');
-  const status = document.getElementById(prefix + '_arb_status');
-  const msgs = [
-    'Validators fetching deliverable...',
-    'Running LLM evaluation...',
-    'Comparing validator results...',
-    'Reaching consensus...',
-    'Finalizing transaction...',
-  ];
-  let step = 0;
-  const iv = setInterval(() => {
-    pct = Math.min(pct + Math.random() * 6, 90);
-    bar.style.width = pct + '%';
-    if (step < msgs.length && pct > step * 18) {
-      status.textContent = msgs[step++];
-    }
-  }, 800);
-  return { iv, bar, status };
+function renderAgentThinking(prefix) {
+  for (let i = 1; i <= 3; i++) {
+    document.getElementById(`${prefix}_a${i}`).className = 'agent-tile thinking';
+    document.getElementById(`${prefix}_a${i}v`).textContent = '...';
+  }
 }
 
-function endProgress(prefix, prog) {
-  clearInterval(prog.iv);
-  prog.bar.style.width = '100%';
-  prog.status.textContent = 'Finalized.';
-  setTimeout(() => {
-    document.getElementById(prefix + '_arb').classList.remove('show');
-  }, 1200);
+function renderAgentResult(prefix, votes) {
+  for (let i = 0; i < 3; i++) {
+    const v = votes[i] || 'partial';
+    document.getElementById(`${prefix}_a${i+1}`).className = `agent-tile v-${v}`;
+    document.getElementById(`${prefix}_a${i+1}v`).textContent = v.toUpperCase();
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 01 CREATE
+// 01 CREATE ESCROW
 // ════════════════════════════════════════════════════════════════════════════
 async function doCreate() {
   const freelancer = document.getElementById('c_freelancer').value.trim();
@@ -1365,21 +1371,29 @@ async function doCreate() {
   const task       = document.getElementById('c_task').value.trim();
   const amount     = document.getElementById('c_amount').value;
 
-  if (!freelancer || !window_s || !task || !amount) { log('c_log', 'All fields required', 'err'); return; }
+  if (!freelancer || !window_s || !task || !amount) {
+    log('c_log', 'All fields required', 'err'); return;
+  }
   if (task.length < 20) { log('c_log', 'Task too short (min 20 chars)', 'err'); return; }
   if (parseInt(window_s) < 60) { log('c_log', 'Dispute window min 60 seconds', 'err'); return; }
 
   log('c_log', 'Sending create_escrow tx...', 'info');
+
   try {
     const valueWei = BigInt(Math.round(parseFloat(amount) * 1e18));
-    await writeContract('create_escrow', [freelancer, task, BigInt(window_s)], valueWei);
-    const total = await readContract('get_total_escrows');
-    const escrowId = Number(total) - 1;
+    const receipt = await writeContract(
+      'create_escrow',
+      [freelancer, task, BigInt(window_s)],
+      valueWei
+    );
+    const escrowId = receipt.result ?? (Number(await readContract('get_total_escrows')) - 1);
+
     log('c_log', `Escrow #${escrowId} created · ${amount} GEN locked`, 'ok');
     log('c_log', `Dispute window: ${window_s}s`, 'info');
-    document.getElementById('c_result_id').textContent   = '#' + escrowId;
-    document.getElementById('c_result_meta').textContent = `${amount} GEN · Window: ${window_s}s · ${freelancer.slice(0, 14)}...`;
-    document.getElementById('c_result').classList.add('show');
+    const box = document.getElementById('c_result');
+    document.getElementById('c_result_id').textContent = '#' + escrowId;
+    document.getElementById('c_result_meta').textContent = `${amount} GEN · Window: ${window_s}s · ${freelancer.slice(0,14)}...`;
+    box.classList.add('show');
     fetchStats();
   } catch (e) {
     log('c_log', `Error: ${errObj(e).error}`, 'err');
@@ -1391,43 +1405,60 @@ async function simCreate() {
   const window_s   = document.getElementById('c_window').value;
   const task       = document.getElementById('c_task').value.trim();
   const amount     = document.getElementById('c_amount').value;
-  if (!freelancer || !window_s || !task || !amount) { log('c_log', 'All fields required', 'err'); return; }
+
+  if (!freelancer || !window_s || !task || !amount) {
+    log('c_log', 'All fields required for simulation', 'err'); return;
+  }
+
   log('c_log', 'Simulating create_escrow...', 'blue');
   try {
     const valueWei = BigInt(Math.round(parseFloat(amount) * 1e18));
-    showSim('c', await simulateContract('create_escrow', [freelancer, task, BigInt(window_s)], valueWei));
-    log('c_log', 'Simulation OK', 'ok');
-  } catch (e) { showSim('c', errObj(e)); log('c_log', `Sim error: ${errObj(e).error}`, 'err'); }
+    const result = await simulateContract('create_escrow', [freelancer, task, BigInt(window_s)], valueWei);
+    showSim('c', result);
+    log('c_log', 'Simulation OK — safe to send', 'ok');
+  } catch (e) {
+    showSim('c', errObj(e));
+    log('c_log', `Sim error: ${errObj(e).error}`, 'err');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 02 SUBMIT
+// 02 SUBMIT DELIVERABLE
 // ════════════════════════════════════════════════════════════════════════════
 async function doSubmit() {
   const id  = document.getElementById('s_id').value;
   const url = document.getElementById('s_url').value.trim();
   if (id === '' || !url) { log('s_log', 'All fields required', 'err'); return; }
+
   log('s_log', `Submitting deliverable for escrow #${id}...`, 'info');
+
   try {
     await writeContract('submit_deliverable', [BigInt(id), url]);
     log('s_log', 'Deliverable submitted · Status → submitted', 'ok');
     document.getElementById('s_result').classList.add('show');
-  } catch (e) { log('s_log', `Error: ${errObj(e).error}`, 'err'); }
+  } catch (e) {
+    log('s_log', `Error: ${errObj(e).error}`, 'err');
+  }
 }
 
 async function simSubmit() {
   const id  = document.getElementById('s_id').value;
   const url = document.getElementById('s_url').value.trim();
   if (id === '' || !url) { log('s_log', 'All fields required', 'err'); return; }
+
   log('s_log', `Simulating submit_deliverable(${id})...`, 'blue');
   try {
-    showSim('s', await simulateContract('submit_deliverable', [BigInt(id), url]));
-    log('s_log', 'Simulation OK', 'ok');
-  } catch (e) { showSim('s', errObj(e)); log('s_log', `Sim error: ${errObj(e).error}`, 'err'); }
+    const result = await simulateContract('submit_deliverable', [BigInt(id), url]);
+    showSim('s', result);
+    log('s_log', 'Simulation OK — safe to send', 'ok');
+  } catch (e) {
+    showSim('s', errObj(e));
+    log('s_log', `Sim error: ${errObj(e).error}`, 'err');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 03 RESOLVE
+// 03 RESOLVE ESCROW
 // ════════════════════════════════════════════════════════════════════════════
 async function doResolve() {
   const id = document.getElementById('r_id').value;
@@ -1435,22 +1466,27 @@ async function doResolve() {
 
   const btn = document.getElementById('r_btn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spin"></span> Awaiting consensus...';
-  document.getElementById('r_verdict').classList.remove('show');
+  btn.innerHTML = '<span class="spin"></span> Running validators...';
 
-  const prog = startProgress('r');
-  log('r_log', `resolve_escrow(${id}) · Each validator fetches deliverable independently...`, 'info');
+  document.getElementById('r_agents').style.display = 'grid';
+  document.getElementById('r_verdict').classList.remove('show');
+  renderAgentThinking('r');
+
+  log('r_log', `resolve_escrow(${id}) · validators fetch deliverable via gl.get_webpage() + consensus...`, 'info');
 
   try {
-    await writeContract('resolve_escrow', [BigInt(id)], undefined, 10000000n);
-    endProgress('r', prog);
-    const data = await readContract('get_verdict', [BigInt(id)]);
-    const verdict = data.final_verdict;
-    log('r_log', `Consensus reached · Verdict: ${verdict?.toUpperCase()} · Dispute window open`, 'ok');
-    renderVerdict('r', verdict, 'Consensus reached via GenLayer validator network · Funds frozen · Dispute window open');
+    const receipt = await writeContract('resolve_escrow', [BigInt(id)]);
+    const verdictData = await readContract('get_verdict', [BigInt(id)]);
+    const votes = verdictData.votes || [];
+    const final_verdict = verdictData.final_verdict;
+
+    renderAgentResult('r', votes);
+    votes.forEach((v,i) => log('r_log', `Validator ${i+1} → ${v.toUpperCase()}`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
+    log('r_log', `Verdict: ${final_verdict?.toUpperCase()} · Funds frozen · Dispute window open`, 'ok');
+    renderVerdict('r', final_verdict, votes);
   } catch (e) {
-    endProgress('r', prog);
     log('r_log', `Error: ${errObj(e).error}`, 'err');
+    document.getElementById('r_agents').style.display = 'none';
   }
 
   btn.disabled = false;
@@ -1460,66 +1496,91 @@ async function doResolve() {
 async function simResolve() {
   const id = document.getElementById('r_id').value;
   if (id === '') { log('r_log', 'Escrow ID required', 'err'); return; }
+
   log('r_log', `Simulating resolve_escrow(${id})...`, 'blue');
   try {
-    showSim('r', await simulateContract('resolve_escrow', [BigInt(id)]));
-    log('r_log', 'Simulation OK', 'ok');
-  } catch (e) { showSim('r', errObj(e)); log('r_log', `Sim error: ${errObj(e).error}`, 'err'); }
+    const result = await simulateContract('resolve_escrow', [BigInt(id)]);
+    showSim('r', result);
+    log('r_log', 'Simulation OK — safe to send', 'ok');
+  } catch (e) {
+    showSim('r', errObj(e));
+    log('r_log', `Sim error: ${errObj(e).error}`, 'err');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 04 CLAIM
+// 04 CLAIM PAYMENT
 // ════════════════════════════════════════════════════════════════════════════
 async function doClaim() {
   const id = document.getElementById('cl_id').value;
   if (id === '') { log('cl_log', 'Escrow ID required', 'err'); return; }
+
   log('cl_log', `claim_payment(${id})...`, 'info');
+
   try {
-    const receipt = await writeContract('claim_payment', [BigInt(id)]);
-    const verdict = receipt?.result;
-    log('cl_log', `Payment claimed · Verdict: ${verdict?.toUpperCase()}`, 'ok');
+    await writeContract('claim_payment', [BigInt(id)]);
+    const data = await readContract('get_verdict', [BigInt(id)]);
+    const verdict = data?.final_verdict;
+    log('cl_log', `Payment claimed · Verdict: ${verdict?.toUpperCase()} · Payout executed`, 'ok');
+    const box = document.getElementById('cl_result');
     document.getElementById('cl_result_verdict').textContent = verdict?.toUpperCase() || 'OK';
-    document.getElementById('cl_result_meta').textContent    = VERDICT_CFG[verdict]?.payout || '';
-    document.getElementById('cl_result').classList.add('show');
-  } catch (e) { log('cl_log', `Error: ${errObj(e).error}`, 'err'); }
+    document.getElementById('cl_result_meta').textContent = VERDICT_CFG[verdict]?.payout || '';
+    box.classList.add('show');
+  } catch (e) {
+    log('cl_log', `Error: ${errObj(e).error}`, 'err');
+  }
 }
 
 async function simClaim() {
   const id = document.getElementById('cl_id').value;
   if (id === '') { log('cl_log', 'Escrow ID required', 'err'); return; }
+
   log('cl_log', `Simulating claim_payment(${id})...`, 'blue');
   try {
-    showSim('cl', await simulateContract('claim_payment', [BigInt(id)]));
-    log('cl_log', 'Simulation OK', 'ok');
-  } catch (e) { showSim('cl', errObj(e)); log('cl_log', `Sim error: ${errObj(e).error}`, 'err'); }
+    const result = await simulateContract('claim_payment', [BigInt(id)]);
+    showSim('cl', result);
+    log('cl_log', 'Simulation OK — safe to send', 'ok');
+  } catch (e) {
+    showSim('cl', errObj(e));
+    log('cl_log', `Sim error: ${errObj(e).error}`, 'err');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 05 DISPUTE
+// 05 DISPUTE ESCROW
 // ════════════════════════════════════════════════════════════════════════════
 async function doDispute() {
   const id = document.getElementById('d_id').value;
   if (id === '') { log('d_log', 'Escrow ID required', 'err'); return; }
+
   log('d_log', `dispute_escrow(${id})...`, 'warn');
+
   try {
     await writeContract('dispute_escrow', [BigInt(id)]);
-    log('d_log', 'Dispute opened · Status → disputed', 'ok');
+    log('d_log', 'Dispute opened · Status → disputed · Funds frozen', 'ok');
     document.getElementById('d_result').classList.add('show');
-  } catch (e) { log('d_log', `Error: ${errObj(e).error}`, 'err'); }
+  } catch (e) {
+    log('d_log', `Error: ${errObj(e).error}`, 'err');
+  }
 }
 
 async function simDispute() {
   const id = document.getElementById('d_id').value;
   if (id === '') { log('d_log', 'Escrow ID required', 'err'); return; }
+
   log('d_log', `Simulating dispute_escrow(${id})...`, 'blue');
   try {
-    showSim('d', await simulateContract('dispute_escrow', [BigInt(id)]));
-    log('d_log', 'Simulation OK', 'ok');
-  } catch (e) { showSim('d', errObj(e)); log('d_log', `Sim error: ${errObj(e).error}`, 'err'); }
+    const result = await simulateContract('dispute_escrow', [BigInt(id)]);
+    showSim('d', result);
+    log('d_log', 'Simulation OK — safe to send', 'ok');
+  } catch (e) {
+    showSim('d', errObj(e));
+    log('d_log', `Sim error: ${errObj(e).error}`, 'err');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 06 RE-RESOLVE
+// 06 RE-RESOLVE ESCROW
 // ════════════════════════════════════════════════════════════════════════════
 async function doReresolve() {
   const id = document.getElementById('rr_id').value;
@@ -1527,22 +1588,27 @@ async function doReresolve() {
 
   const btn = document.getElementById('rr_btn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spin"></span> Awaiting final consensus...';
-  document.getElementById('rr_verdict').classList.remove('show');
+  btn.innerHTML = '<span class="spin"></span> Re-arbitrating...';
 
-  const prog = startProgress('rr');
-  log('rr_log', `re_resolve_escrow(${id}) · Final arbitration · Extra scrutiny...`, 'warn');
+  document.getElementById('rr_agents').style.display = 'grid';
+  document.getElementById('rr_verdict').classList.remove('show');
+  renderAgentThinking('rr');
+
+  log('rr_log', `re_resolve_escrow(${id}) · Final arbitration...`, 'warn');
 
   try {
-    await writeContract('re_resolve_escrow', [BigInt(id)], undefined, 10000000n);
-    endProgress('rr', prog);
-    const data = await readContract('get_verdict', [BigInt(id)]);
-    const verdict = data.final_verdict;
-    log('rr_log', `Final consensus · Verdict: ${verdict?.toUpperCase()} · Payout executed`, 'ok');
-    renderVerdict('rr', verdict, 'Final consensus via GenLayer validator network · Payout executed automatically');
+    await writeContract('re_resolve_escrow', [BigInt(id)]);
+    const verdictData = await readContract('get_verdict', [BigInt(id)]);
+    const votes = verdictData.votes || [];
+    const final_verdict = verdictData.final_verdict;
+
+    renderAgentResult('rr', votes);
+    votes.forEach((v,i) => log('rr_log', `Validator ${i+1} → ${v.toUpperCase()}`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
+    log('rr_log', `Final verdict: ${final_verdict?.toUpperCase()} · Payout executed`, 'ok');
+    renderVerdict('rr', final_verdict, votes);
   } catch (e) {
-    endProgress('rr', prog);
     log('rr_log', `Error: ${errObj(e).error}`, 'err');
+    document.getElementById('rr_agents').style.display = 'none';
   }
 
   btn.disabled = false;
@@ -1552,91 +1618,113 @@ async function doReresolve() {
 async function simReresolve() {
   const id = document.getElementById('rr_id').value;
   if (id === '') { log('rr_log', 'Escrow ID required', 'err'); return; }
+
   log('rr_log', `Simulating re_resolve_escrow(${id})...`, 'blue');
   try {
-    showSim('rr', await simulateContract('re_resolve_escrow', [BigInt(id)]));
-    log('rr_log', 'Simulation OK', 'ok');
-  } catch (e) { showSim('rr', errObj(e)); log('rr_log', `Sim error: ${errObj(e).error}`, 'err'); }
+    const result = await simulateContract('re_resolve_escrow', [BigInt(id)]);
+    showSim('rr', result);
+    log('rr_log', 'Simulation OK — safe to send', 'ok');
+  } catch (e) {
+    showSim('rr', errObj(e));
+    log('rr_log', `Sim error: ${errObj(e).error}`, 'err');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 07 STATUS
+// 07 CHECK STATUS (get_escrow)
 // ════════════════════════════════════════════════════════════════════════════
 async function doStatus() {
   const id = document.getElementById('st_id').value;
   if (id === '') return;
+
   log('st_log', `get_escrow(${id})...`, 'info');
+
   try {
     const data = await readContract('get_escrow', [BigInt(id)]);
+
     if (data?.status) {
-      document.getElementById('st_num').textContent        = id;
-      document.getElementById('st_client').textContent     = data.client || '—';
+      document.getElementById('st_num').textContent = id;
+      document.getElementById('st_client').textContent    = data.client || '—';
       document.getElementById('st_freelancer').textContent = data.freelancer || '—';
-      document.getElementById('st_amount').textContent     = data.amount_wei || '—';
-      document.getElementById('st_window').textContent     = (data.dispute_window_seconds || '—') + 's';
-      document.getElementById('st_verdict').textContent    = data.final_verdict || '—';
-      document.getElementById('st_url').textContent        = data.deliverable_url || '—';
-      document.getElementById('st_task').textContent       = data.task_description || '—';
+      document.getElementById('st_amount').textContent   = data.amount_wei || '—';
+      document.getElementById('st_window').textContent   = (data.dispute_window_seconds || '—') + 's';
+      document.getElementById('st_verdict').textContent  = data.final_verdict || '—';
+      document.getElementById('st_votes').textContent    = (data.votes || []).join(', ') || '—';
+      document.getElementById('st_url').textContent      = data.deliverable_url || '—';
+      document.getElementById('st_task').textContent     = data.task_description || '—';
+
       const badge = document.getElementById('st_badge');
       badge.textContent = (data.status || '—').toUpperCase();
-      badge.className   = `status-badge ${data.status || ''}`;
+      badge.className = `status-badge ${data.status || ''}`;
+
       document.getElementById('st_card').classList.add('show');
       log('st_log', `Status: ${data.status?.toUpperCase()}`, 'ok');
     } else {
       log('st_log', 'Escrow not found', 'err');
     }
-  } catch (e) { log('st_log', `Error: ${errObj(e).error}`, 'err'); }
+  } catch(e) {
+    log('st_log', `Error: ${errObj(e).error}`, 'err');
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 08 CONTRACT INFO
+// 08 CONTRACT INFO (get_owner, get_platform_fee_bps, get_total_escrows)
 // ════════════════════════════════════════════════════════════════════════════
 async function doContractInfo() {
   log('ci_log', 'Fetching contract info...', 'info');
   try {
-    const [owner, feeBps, total] = await Promise.all([
-      readContract('get_owner'),
-      readContract('get_platform_fee_bps'),
-      readContract('get_total_escrows'),
-    ]);
-    document.getElementById('ci_owner').textContent    = owner || '—';
-    document.getElementById('ci_fee').textContent      = feeBps?.toString() || '—';
-    document.getElementById('ci_total').textContent    = total?.toString() || '—';
-    document.getElementById('ci_fee_pct').textContent  = feeBps ? (Number(feeBps) / 100).toFixed(2) + '%' : '—';
-    document.getElementById('ci_address').value        = CONTRACT_ADDRESS;
-    document.getElementById('statTotal').textContent   = total?.toString() || '—';
-    document.getElementById('statFee').textContent     = feeBps ? (Number(feeBps) / 100).toFixed(2) + '%' : '—';
-    document.getElementById('statOwner').textContent   = owner ? owner.slice(0, 14) + '...' : '—';
-    log('ci_log', `Owner: ${owner?.slice(0, 20)}... · Fee: ${feeBps} bps · Total: ${total}`, 'ok');
-  } catch (e) { log('ci_log', `Error: ${errObj(e).error}`, 'err'); }
+    const owner = await readContract('get_owner');
+    const feeBps = await readContract('get_platform_fee_bps');
+    const total = await readContract('get_total_escrows');
+
+    document.getElementById('ci_owner').textContent = owner || '—';
+    document.getElementById('ci_fee').textContent = feeBps?.toString() || '—';
+    document.getElementById('ci_total').textContent = total?.toString() || '—';
+    document.getElementById('ci_fee_pct').textContent = feeBps ? (Number(feeBps) / 100).toFixed(2) + '%' : '—';
+    document.getElementById('ci_address').value = CONTRACT_ADDRESS;
+
+    // Also update sidebar stats
+    document.getElementById('statTotal').textContent = total?.toString() || '—';
+    document.getElementById('statFee').textContent = feeBps ? (Number(feeBps) / 100).toFixed(2) + '%' : '—';
+    document.getElementById('statOwner').textContent = owner ? owner.slice(0, 14) + '...' : '—';
+
+    log('ci_log', `Owner: ${owner?.slice(0,20)}... · Fee: ${feeBps} bps · Total: ${total}`, 'ok');
+  } catch (e) {
+    log('ci_log', `Error: ${errObj(e).error}`, 'err');
+  }
 }
 
-// ── STATS ─────────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// STATS
+// ════════════════════════════════════════════════════════════════════════════
 async function fetchStats() {
   try {
-    const [total, feeBps, owner] = await Promise.all([
-      readContract('get_total_escrows'),
-      readContract('get_platform_fee_bps'),
-      readContract('get_owner'),
-    ]);
+    const total = await readContract('get_total_escrows');
+    const feeBps = await readContract('get_platform_fee_bps');
+    const owner = await readContract('get_owner');
     document.getElementById('statTotal').textContent = total.toString();
-    document.getElementById('statFee').textContent   = (Number(feeBps) / 100).toFixed(2) + '%';
+    document.getElementById('statFee').textContent = (Number(feeBps) / 100).toFixed(2) + '%';
     document.getElementById('statOwner').textContent = owner ? owner.slice(0, 14) + '...' : '—';
   } catch {}
 }
 
-// ── EXPOSE ────────────────────────────────────────────────────────────────────
+// expose handlers used by inline onclick="" attributes (module scope isn't global)
 window.nav = nav;
-window.doCreate = doCreate; window.simCreate = simCreate;
-window.doSubmit = doSubmit; window.simSubmit = simSubmit;
-window.doResolve = doResolve; window.simResolve = simResolve;
-window.doClaim = doClaim; window.simClaim = simClaim;
-window.doDispute = doDispute; window.simDispute = simDispute;
-window.doReresolve = doReresolve; window.simReresolve = simReresolve;
+window.doCreate = doCreate;
+window.doSubmit = doSubmit;
+window.doResolve = doResolve;
+window.doClaim = doClaim;
+window.doDispute = doDispute;
+window.doReresolve = doReresolve;
 window.doStatus = doStatus;
 window.doContractInfo = doContractInfo;
+window.simCreate = simCreate;
+window.simSubmit = simSubmit;
+window.simResolve = simResolve;
+window.simClaim = simClaim;
+window.simDispute = simDispute;
+window.simReresolve = simReresolve;
 
-updateRoleUI();
 fetchStats();
 </script>
 </body>
