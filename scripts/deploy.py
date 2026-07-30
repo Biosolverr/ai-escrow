@@ -1,120 +1,108 @@
 #!/usr/bin/env python3
 """
 scripts/deploy.py
-Deploy the AIEscrow contract to GenLayer testnet/mainnet.
+Deploy the AIEscrow contract to a GenLayer network via the official
+`genlayer` CLI (npm package "genlayer"). This is a thin wrapper — the
+actual deployment work is done by the CLI's own account/keystore and
+network configuration, which must be set up beforehand:
+
+    npm install -g genlayer
+    genlayer network set testnet-bradbury
+    genlayer account create      # or `genlayer account unlock` if you
+                                  # already have an account
 
 Usage:
+    python scripts/deploy.py --network testnet-bradbury
     python scripts/deploy.py --network studionet
-    python scripts/deploy.py --network testnet
-    python scripts/deploy.py --network mainnet
 
-Or via CLI:
-    genlayer deploy contracts/ai_escrow.py
+This script does NOT talk to the chain directly — there is no
+"genlayer" pip package with a GenLayerClient/Account API. All signing
+and RPC calls go through the CLI's own keystore/config, which is why
+`genlayer account unlock` must be run once beforehand (the key is then
+cached in the OS keychain).
 """
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
-try:
-    from genlayer import GenLayerClient, Account
-except ImportError:
-    print("❌  genlayer SDK not found. Run: pip install genlayer")
-    sys.exit(1)
+REPO_ROOT = Path(__file__).parent.parent
+CONTRACT_PATH = REPO_ROOT / "contracts" / "ai_escrow.py"
+DEPLOYMENT_INFO_PATH = REPO_ROOT / "deployment.json"
+
+KNOWN_NETWORKS = ["studionet", "testnet-bradbury", "mainnet"]
 
 
-NETWORKS = {
-    "studionet": "http://localhost:8080",
-    "testnet":   "https://rpc.testnet.genlayer.com",
-    "mainnet":   "https://rpc.genlayer.com",
-}
+def _require_cli() -> None:
+    if shutil.which("genlayer") is None:
+        print("❌  'genlayer' CLI not found on PATH. Install it with:")
+        print("    npm install -g genlayer")
+        sys.exit(1)
 
 
-def deploy(network: str, private_key: str | None = None) -> dict:
-    rpc_url = NETWORKS.get(network)
-    if not rpc_url:
-        raise ValueError(f"Unknown network: {network}. Choose from {list(NETWORKS)}")
+def _run(cmd: list[str]) -> str:
+    print(f"$ {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr, file=sys.stderr)
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}")
+    print(result.stdout)
+    return result.stdout
 
-    print(f"\n🚀  Deploying AIEscrow to {network} ({rpc_url})")
 
-    client = GenLayerClient(rpc_url=rpc_url)
+def deploy(network: str) -> dict:
+    if network not in KNOWN_NETWORKS:
+        print(f"⚠️  '{network}' is not in the known list {KNOWN_NETWORKS} — "
+              f"continuing anyway in case it's a custom network you configured.")
 
-    if private_key:
-        account = Account.from_private_key(private_key)
-    else:
-        # Use the default account configured in genlayer CLI
-        account = client.get_default_account()
+    if not CONTRACT_PATH.exists():
+        raise FileNotFoundError(f"Contract not found: {CONTRACT_PATH}")
 
-    print(f"👤  Deployer: {account.address}")
-    print(f"💰  Balance:  {client.get_balance(account.address)} wei")
+    _require_cli()
 
-    contract_path = Path(__file__).parent.parent / "contracts" / "ai_escrow.py"
-    if not contract_path.exists():
-        raise FileNotFoundError(f"Contract not found: {contract_path}")
+    print(f"\n🚀  Deploying AIEscrow to {network}")
+    _run(["genlayer", "network", "set", network])
+    _run(["genlayer", "account"])  # sanity check: prints active account + balance
 
-    print(f"📄  Contract: {contract_path}")
-    print("⏳  Sending deployment transaction...")
+    output = _run(["genlayer", "deploy", "--contract", str(CONTRACT_PATH)])
 
-    tx_hash = client.deploy_contract(
-        account=account,
-        contract_file=str(contract_path),
-        args=[],
-    )
-
-    print(f"📨  TX Hash:  {tx_hash}")
-    print("⏳  Waiting for confirmation...")
-
-    receipt = client.wait_for_transaction(tx_hash)
-    contract_address = receipt["contract_address"]
-
-    print(f"\n✅  Contract deployed!")
-    print(f"📋  Address: {contract_address}")
-    print(f"🔗  Explorer: https://explorer.genlayer.com/contract/{contract_address}")
-
+    # The CLI prints a JSON-ish result block; try to recover the address/hash
+    # for our own record. If parsing fails, the raw CLI output above already
+    # has everything — this is just a convenience file.
     deployment_info = {
-        "network":          network,
-        "contract_address": contract_address,
-        "deployer":         str(account.address),
-        "tx_hash":          tx_hash,
-        "block_number":     receipt.get("block_number"),
-        "abi_schema":       _get_contract_schema(client, contract_address),
+        "network": network,
+        "contract_path": str(CONTRACT_PATH.relative_to(REPO_ROOT)),
+        "raw_cli_output": output.strip(),
     }
 
-    # Save deployment info
-    output_path = Path(__file__).parent.parent / "deployment.json"
-    with open(output_path, "w") as f:
+    with open(DEPLOYMENT_INFO_PATH, "w") as f:
         json.dump(deployment_info, f, indent=2)
 
-    print(f"\n💾  Deployment info saved to: {output_path}")
+    print(f"\n💾  Raw deploy output saved to: {DEPLOYMENT_INFO_PATH}")
+    print("   (copy the Contract Address from the CLI output above into")
+    print("    frontend/index.html's CONTRACT_ADDRESS constant)")
     return deployment_info
 
 
-def _get_contract_schema(client, address: str) -> dict:
-    try:
-        return client.get_contract_schema(address)
-    except Exception:
-        return {}
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Deploy AIEscrow to GenLayer")
-    parser.add_argument(
-        "--network", "-n",
-        default="studionet",
-        choices=list(NETWORKS),
-        help="Target network (default: studionet)",
+    parser = argparse.ArgumentParser(
+        description="Deploy AIEscrow via the genlayer CLI"
     )
     parser.add_argument(
-        "--private-key", "-k",
-        default=None,
-        help="Deployer private key (optional, uses genlayer config if not set)",
+        "--network", "-n",
+        default="testnet-bradbury",
+        help="Target network alias known to the genlayer CLI "
+             "(e.g. studionet, testnet-bradbury)",
     )
     args = parser.parse_args()
 
     try:
-        result = deploy(network=args.network, private_key=args.private_key)
-        print(f"\n🎉  Done! Contract address: {result['contract_address']}")
+        deploy(network=args.network)
+        print("\n🎉  Done.")
     except Exception as e:
         print(f"\n❌  Deployment failed: {e}")
         sys.exit(1)
