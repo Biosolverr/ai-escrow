@@ -1,4 +1,7 @@
-genlayer==0.0.1
+# Note: contract runtime deps are declared in the contract's own
+# `# { "Depends": ... }` header and resolved by GenVM — not via pip.
+# This file only covers local testing tooling.
+genlayer-test>=0.1.0   # provides the `gltest` command
 pytest>=8.0
 pytest-asyncio>=0.23
 python-dotenv>=1.0.0
