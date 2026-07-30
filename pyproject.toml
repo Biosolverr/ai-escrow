@@ -9,12 +9,14 @@ description = "AI-powered freelance escrow with multi-LLM dispute resolution"
 readme = "README.md"
 requires-python = ">=3.11"
 
-dependencies = [
-    "genlayer>=0.1.0",
-]
+dependencies = []
+# Contract runtime deps are declared in ai_escrow.py's own
+# `# { "Depends": ... }` header and resolved by GenVM at deploy time,
+# not via pip.
 
 [project.optional-dependencies]
 dev = [
+    "genlayer-test>=0.1.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
