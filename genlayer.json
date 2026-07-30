@@ -12,19 +12,27 @@
     }
   ],
   "networks": {
-    "default": "studionet",
+    "default": "testnet-bradbury",
     "studionet": {
       "rpc_url": "http://localhost:8080",
       "chain_id": 1337
     },
-    "testnet": {
-      "rpc_url": "https://rpc.testnet.genlayer.com",
-      "chain_id": 42069
+    "testnet-bradbury": {
+      "rpc_url": "https://rpc-bradbury.genlayer.com",
+      "chain_id": 4221,
+      "main_contract": "0x0112Bf6e83497965A5fdD6Dad1E447a6E004271D",
+      "staking_contract": "0x4A4449E617F8D10FDeD0b461CadEf83939E821A5",
+      "explorer": "https://explorer-bradbury.genlayer.com/"
     },
     "mainnet": {
       "rpc_url": "https://rpc.genlayer.com",
       "chain_id": 42420
     }
+  },
+  "deployment": {
+    "network": "testnet-bradbury",
+    "contract_address": "0xCc6ec0B09D33989671984C736702cCcC4B22d07B",
+    "tx_hash": "0x6475a1648418a85635034df5869dda0fd959ef70e646385a91fd9eecc44b95d5"
   },
   "testing": {
     "test_dir": "tests",
