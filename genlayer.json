@@ -8,7 +8,7 @@
     {
       "name": "AIEscrow",
       "path": "contracts/ai_escrow.py",
-      "description": "Smart escrow contract using 3 LLM validators + majority vote consensus"
+      "description": "Smart escrow contract using LLM arbitration with strict_eq validator consensus"
     }
   ],
   "networks": {
