@@ -526,6 +526,8 @@ body::after {
 .t-ok   { color: var(--green); }
 .t-err  { color: var(--red); }
 .t-warn { color: var(--amber); }
+.tx-link { color: inherit; text-decoration: underline; text-decoration-style: dotted; }
+.tx-link:hover { color: var(--white); }
 
 /* ── LOADER ── */
 .spin {
@@ -683,12 +685,12 @@ body::after {
         <span class="stat-val" id="statTotal">—</span>
       </div>
       <div class="stat-row">
-        <span class="stat-key">Validators</span>
-        <span class="stat-val">3</span>
+        <span class="stat-key">Owner</span>
+        <span class="stat-val" id="statOwner" style="font-size:11px" title="">—</span>
       </div>
       <div class="stat-row">
-        <span class="stat-key">Fee</span>
-        <span class="stat-val">1%</span>
+        <span class="stat-key">Platform Fee</span>
+        <span class="stat-val" id="statFee">—</span>
       </div>
     </div>
   </aside>
@@ -1082,7 +1084,14 @@ async function writeContract(method, args = [], value = undefined) {
     args,
     value,
   });
-  return await c.waitForTransactionReceipt({ hash: txHash, status: 'FINALIZED' });
+  const receipt = await c.waitForTransactionReceipt({ hash: txHash, status: 'FINALIZED' });
+  return { hash: txHash, receipt };
+}
+
+const EXPLORER_TX_BASE = 'https://explorer-bradbury.genlayer.com/tx/';
+
+function txLink(hash) {
+  return `<a href="${EXPLORER_TX_BASE}${hash}" target="_blank" rel="noopener" class="tx-link">${hash.slice(0,10)}…${hash.slice(-6)} ↗</a>`;
 }
 
 // ── NAV ──────────────────────────────────────────────────────────────────────
@@ -1153,13 +1162,14 @@ async function doCreate() {
 
   try {
     const valueWei = BigInt(Math.round(parseFloat(amount) * 1e18));
-    const receipt = await writeContract(
+    const { hash, receipt } = await writeContract(
       'create_escrow',
       [freelancer, task, BigInt(window_s)],
       valueWei
     );
     const escrowId = receipt.result ?? (Number(await readContract('get_total_escrows')) - 1);
 
+    log('c_log', `Tx: ${txLink(hash)}`, 'info');
     log('c_log', `Escrow #${escrowId} created · ${amount} GEN locked`, 'ok');
     log('c_log', `Dispute window: ${window_s}s`, 'info');
     const box = document.getElementById('c_result');
@@ -1181,7 +1191,8 @@ async function doSubmit() {
   log('s_log', `Submitting deliverable for escrow #${id}...`, 'info');
 
   try {
-    await writeContract('submit_deliverable', [BigInt(id), url]);
+    const { hash } = await writeContract('submit_deliverable', [BigInt(id), url]);
+    log('s_log', `Tx: ${txLink(hash)}`, 'info');
     log('s_log', 'Deliverable submitted · Status → submitted', 'ok');
     document.getElementById('s_result').classList.add('show');
   } catch (e) {
@@ -1205,7 +1216,8 @@ async function doResolve() {
   log('r_log', `resolve_escrow(${id}) · leader + validators fetch deliverable via gl.nondet.web.render() + strict_eq consensus...`, 'info');
 
   try {
-    const receipt = await writeContract('resolve_escrow', [BigInt(id)]);
+    const { hash } = await writeContract('resolve_escrow', [BigInt(id)]);
+    log('r_log', `Tx: ${txLink(hash)}`, 'info');
     const verdictData = await readContract('get_verdict', [BigInt(id)]);
     const final_verdict = verdictData.final_verdict;
 
@@ -1229,8 +1241,9 @@ async function doClaim() {
   log('cl_log', `claim_payment(${id})...`, 'info');
 
   try {
-    const receipt = await writeContract('claim_payment', [BigInt(id)]);
+    const { hash, receipt } = await writeContract('claim_payment', [BigInt(id)]);
     const verdict = receipt.result;
+    log('cl_log', `Tx: ${txLink(hash)}`, 'info');
     log('cl_log', `Payment claimed · Verdict: ${verdict?.toUpperCase()}`, 'ok');
     const box = document.getElementById('cl_result');
     document.getElementById('cl_result_verdict').textContent = verdict?.toUpperCase() || 'OK';
@@ -1249,7 +1262,8 @@ async function doDispute() {
   log('d_log', `dispute_escrow(${id})...`, 'warn');
 
   try {
-    await writeContract('dispute_escrow', [BigInt(id)]);
+    const { hash } = await writeContract('dispute_escrow', [BigInt(id)]);
+    log('d_log', `Tx: ${txLink(hash)}`, 'info');
     log('d_log', 'Dispute opened · Status → disputed · Funds frozen', 'ok');
     document.getElementById('d_result').classList.add('show');
   } catch (e) {
@@ -1273,7 +1287,8 @@ async function doReresolve() {
   log('rr_log', `re_resolve_escrow(${id}) · Final arbitration...`, 'warn');
 
   try {
-    await writeContract('re_resolve_escrow', [BigInt(id)]);
+    const { hash } = await writeContract('re_resolve_escrow', [BigInt(id)]);
+    log('rr_log', `Tx: ${txLink(hash)}`, 'info');
     const verdictData = await readContract('get_verdict', [BigInt(id)]);
     const final_verdict = verdictData.final_verdict;
 
@@ -1333,6 +1348,17 @@ async function fetchStats() {
     const total = await readContract('get_total_escrows');
     document.getElementById('statTotal').textContent = total.toString();
   } catch {}
+  try {
+    const owner = await readContract('get_owner');
+    const ownerStr = String(owner);
+    const el = document.getElementById('statOwner');
+    el.textContent = ownerStr.slice(0, 6) + '…' + ownerStr.slice(-4);
+    el.title = ownerStr;
+  } catch {}
+  try {
+    const feeBps = await readContract('get_platform_fee_bps');
+    document.getElementById('statFee').textContent = (Number(feeBps) / 100) + '%';
+  } catch {}
 }
 
 // expose handlers used by inline onclick="" attributes (module scope isn't global)
@@ -1349,5 +1375,3 @@ fetchStats();
 </script>
 </body>
 </html>
-
-
