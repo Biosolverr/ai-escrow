@@ -429,27 +429,6 @@ body::after {
 
 .verdict-payout { font-size: 12px; color: var(--gray5); }
 
-.votes-strip {
-  display: flex;
-  gap: 8px;
-}
-
-.vote-pill {
-  flex: 1;
-  padding: 10px 0;
-  text-align: center;
-  border-radius: 4px;
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 500;
-  border: 1px solid;
-}
-
-.vote-pill.approved { background: #0d1a06; border-color: #2a4010; color: var(--green); }
-.vote-pill.partial  { background: #1a1206; border-color: #403010; color: var(--amber); }
-.vote-pill.rejected { background: #1a0606; border-color: #401010; color: var(--red); }
-
 /* ── STATUS CARD ── */
 .status-card {
   border: 1px solid var(--border);
@@ -563,7 +542,7 @@ body::after {
 /* ── AGENTS ── */
 .agents-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr;
   gap: 12px;
   margin: 20px 0;
 }
@@ -800,7 +779,7 @@ body::after {
       <div class="panel-head">
         <div>
           <div class="panel-title">Resolve Escrow</div>
-          <div class="panel-sub">3 LLM validators fetch &amp; evaluate deliverable · Funds frozen · Dispute window opens</div>
+          <div class="panel-sub">Leader + validators independently fetch &amp; evaluate deliverable · Funds frozen · Dispute window opens</div>
         </div>
         <div class="panel-num">03</div>
       </div>
@@ -815,16 +794,8 @@ body::after {
 
       <div class="agents-grid" id="r_agents" style="display:none">
         <div class="agent-tile" id="r_a1">
-          <div class="agent-num">01</div>
-          <div class="agent-result" id="r_a1v">WAITING</div>
-        </div>
-        <div class="agent-tile" id="r_a2">
-          <div class="agent-num">02</div>
-          <div class="agent-result" id="r_a2v">WAITING</div>
-        </div>
-        <div class="agent-tile" id="r_a3">
-          <div class="agent-num">03</div>
-          <div class="agent-result" id="r_a3v">WAITING</div>
+          <div class="agent-num">·</div>
+          <div class="agent-result" id="r_a1v">EVALUATING</div>
         </div>
       </div>
 
@@ -840,7 +811,6 @@ body::after {
             <div class="verdict-payout" id="r_vpayout"></div>
           </div>
         </div>
-        <div class="votes-strip" id="r_votes"></div>
       </div>
 
       <div class="terminal" id="r_log"></div>
@@ -971,16 +941,8 @@ body::after {
 
       <div class="agents-grid" id="rr_agents" style="display:none">
         <div class="agent-tile" id="rr_a1">
-          <div class="agent-num">01</div>
-          <div class="agent-result" id="rr_a1v">WAITING</div>
-        </div>
-        <div class="agent-tile" id="rr_a2">
-          <div class="agent-num">02</div>
-          <div class="agent-result" id="rr_a2v">WAITING</div>
-        </div>
-        <div class="agent-tile" id="rr_a3">
-          <div class="agent-num">03</div>
-          <div class="agent-result" id="rr_a3v">WAITING</div>
+          <div class="agent-num">·</div>
+          <div class="agent-result" id="rr_a1v">EVALUATING</div>
         </div>
       </div>
 
@@ -996,7 +958,6 @@ body::after {
             <div class="verdict-payout" id="rr_vpayout"></div>
           </div>
         </div>
-        <div class="votes-strip" id="rr_votes"></div>
       </div>
 
       <div class="terminal" id="rr_log"></div>
@@ -1052,10 +1013,6 @@ body::after {
           <div class="status-field">
             <div class="status-field-key">Resolved At</div>
             <div class="status-field-val" id="st_resolved">—</div>
-          </div>
-          <div class="status-field">
-            <div class="status-field-key">Votes</div>
-            <div class="status-field-val" id="st_votes">—</div>
           </div>
           <div class="status-field">
             <div class="status-field-key">Deliverable URL</div>
@@ -1158,7 +1115,7 @@ const VERDICT_CFG = {
   rejected: { icon:'✕', label:'REJECTED', payout:'Full refund → Client', cls:'rejected' },
 };
 
-function renderVerdict(prefix, verdict, votes) {
+function renderVerdict(prefix, verdict) {
   const cfg = VERDICT_CFG[verdict] || VERDICT_CFG.partial;
   const wrap = document.getElementById(prefix + '_verdict');
   const banner = document.getElementById(prefix + '_vbanner');
@@ -1166,26 +1123,17 @@ function renderVerdict(prefix, verdict, votes) {
   document.getElementById(prefix + '_vicon').textContent = cfg.icon;
   document.getElementById(prefix + '_vlabel').textContent = cfg.label;
   document.getElementById(prefix + '_vpayout').textContent = cfg.payout;
-  const vRow = document.getElementById(prefix + '_votes');
-  vRow.innerHTML = (votes || []).map((v,i) =>
-    `<div class="vote-pill ${v}">Agent ${i+1}: ${v.toUpperCase()}</div>`
-  ).join('');
   wrap.classList.add('show');
 }
 
-function renderAgentThinking(prefix) {
-  for (let i = 1; i <= 3; i++) {
-    document.getElementById(`${prefix}_a${i}`).className = 'agent-tile thinking';
-    document.getElementById(`${prefix}_a${i}v`).textContent = '...';
-  }
+function renderEvaluating(prefix) {
+  document.getElementById(`${prefix}_a1`).className = 'agent-tile thinking';
+  document.getElementById(`${prefix}_a1v`).textContent = '...';
 }
 
-function renderAgentResult(prefix, votes) {
-  for (let i = 0; i < 3; i++) {
-    const v = votes[i] || 'partial';
-    document.getElementById(`${prefix}_a${i+1}`).className = `agent-tile v-${v}`;
-    document.getElementById(`${prefix}_a${i+1}v`).textContent = v.toUpperCase();
-  }
+function renderEvaluated(prefix, verdict) {
+  document.getElementById(`${prefix}_a1`).className = `agent-tile v-${verdict}`;
+  document.getElementById(`${prefix}_a1v`).textContent = verdict.toUpperCase();
 }
 
 // ── 01 CREATE ─────────────────────────────────────────────────────────────────
@@ -1252,20 +1200,18 @@ async function doResolve() {
 
   document.getElementById('r_agents').style.display = 'grid';
   document.getElementById('r_verdict').classList.remove('show');
-  renderAgentThinking('r');
+  renderEvaluating('r');
 
-  log('r_log', `resolve_escrow(${id}) · validators fetch deliverable via gl.get_webpage() + consensus...`, 'info');
+  log('r_log', `resolve_escrow(${id}) · leader + validators fetch deliverable via gl.nondet.web.render() + strict_eq consensus...`, 'info');
 
   try {
     const receipt = await writeContract('resolve_escrow', [BigInt(id)]);
     const verdictData = await readContract('get_verdict', [BigInt(id)]);
-    const votes = verdictData.votes || [];
     const final_verdict = verdictData.final_verdict;
 
-    renderAgentResult('r', votes);
-    votes.forEach((v,i) => log('r_log', `Validator ${i+1} → ${v.toUpperCase()}`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
+    renderEvaluated('r', final_verdict);
     log('r_log', `Verdict: ${final_verdict?.toUpperCase()} · Funds frozen · Dispute window open`, 'ok');
-    renderVerdict('r', final_verdict, votes);
+    renderVerdict('r', final_verdict);
   } catch (e) {
     log('r_log', `Error: ${errObj(e).error}`, 'err');
     document.getElementById('r_agents').style.display = 'none';
@@ -1322,20 +1268,18 @@ async function doReresolve() {
 
   document.getElementById('rr_agents').style.display = 'grid';
   document.getElementById('rr_verdict').classList.remove('show');
-  renderAgentThinking('rr');
+  renderEvaluating('rr');
 
   log('rr_log', `re_resolve_escrow(${id}) · Final arbitration...`, 'warn');
 
   try {
     await writeContract('re_resolve_escrow', [BigInt(id)]);
     const verdictData = await readContract('get_verdict', [BigInt(id)]);
-    const votes = verdictData.votes || [];
     const final_verdict = verdictData.final_verdict;
 
-    renderAgentResult('rr', votes);
-    votes.forEach((v,i) => log('rr_log', `Validator ${i+1} → ${v.toUpperCase()}`, v === 'approved' ? 'ok' : v === 'rejected' ? 'err' : 'warn'));
+    renderEvaluated('rr', final_verdict);
     log('rr_log', `Final verdict: ${final_verdict?.toUpperCase()} · Payout executed`, 'ok');
-    renderVerdict('rr', final_verdict, votes);
+    renderVerdict('rr', final_verdict);
   } catch (e) {
     log('rr_log', `Error: ${errObj(e).error}`, 'err');
     document.getElementById('rr_agents').style.display = 'none';
@@ -1362,7 +1306,6 @@ async function doStatus() {
       document.getElementById('st_amount').textContent   = data.amount_wei || '—';
       document.getElementById('st_window').textContent   = (data.dispute_window_seconds || '—') + 's';
       document.getElementById('st_verdict').textContent  = data.final_verdict || '—';
-      document.getElementById('st_votes').textContent    = (data.votes || []).join(', ') || '—';
       document.getElementById('st_url').textContent      = data.deliverable_url || '—';
 
       const ts = data.resolved_at;
@@ -1406,4 +1349,5 @@ fetchStats();
 </script>
 </body>
 </html>
+
 
