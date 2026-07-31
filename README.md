@@ -10,12 +10,14 @@ An on-chain freelance escrow where **three LLM validators independently fetch th
 Browser (frontend/index.html)
   └── genlayer-js  ──────────────────────────► GenLayer node
                                                   └── contracts/ai_escrow.py
-                                                        ├── gl.get_webpage(url)   ← fetches deliverable
+                                                        ├── gl.nondet.web.render(url) ← fetches deliverable
                                                         ├── gl.nondet.exec_prompt ← LLM arbitration
                                                         └── gl.message_raw["datetime"] ← consensus time
 ```
 
-`main.ts` is a **pure static file server** — it serves `frontend/index.html` and nothing else. All business logic runs on-chain inside `ai_escrow.py`; there is no off-chain LLM reimplementation.
+Frontend is a single self-contained static file — no server-side code, no
+off-chain LLM reimplementation. All business logic runs on-chain inside
+`ai_escrow.py`; the browser talks directly to the chain via `genlayer-js`.
 
 ---
 
@@ -23,14 +25,22 @@ Browser (frontend/index.html)
 
 ### Key design decisions
 
-#### 1 · Validators read the actual deliverable (`gl.get_webpage`)
+#### 1 · Leader + validators independently fetch the deliverable (`gl.nondet.web.render`)
 
 ```python
-deliverable_content = gl.get_webpage(deliverable_url, mode="text")
+deliverable_content = gl.nondet.web.render(deliverable_url, mode="text")
 content_excerpt = deliverable_content[:4000]
 ```
 
-Both the leader and every validator independently fetch the deliverable URL during arbitration. The LLM prompt includes the fetched content, so the verdict is based on what the URL actually contains, not just its address.
+The leader fetches the deliverable URL and asks an LLM for a verdict, already
+normalised to one of three canonical strings: `"approved"`, `"partial"`,
+`"rejected"`. Every validator independently re-runs the exact same function
+(own fetch, own LLM call), and GenVM compares the two canonical strings via
+`gl.eq_principle.strict_eq()` — exact match, since the output is already
+reduced to a fixed category before comparison. A mismatch means a genuine
+disagreement about the outcome, not a wording difference, so `strict_eq` is
+the correct (and cheapest) Equivalence Principle here — no extra NLP
+comparison call is needed the way `prompt_comparative` would require.
 
 #### 2 · Deterministic timestamps (`gl.message_raw["datetime"]`)
 
@@ -83,21 +93,46 @@ No proxy, no backend API, no off-chain reimplementation.
 
 ---
 
+## Deployed contract
+
+| | |
+|---|---|
+| Network | GenLayer Bradbury Testnet (chainId 4221) |
+| Contract address | `0xCc6ec0B09D33989671984C736702cCcC4B22d07B` |
+| Deploy tx | `0x6475a1648418a85635034df5869dda0fd959ef70e646385a91fd9eecc44b95d5` |
+| Explorer | https://explorer-bradbury.genlayer.com/ |
+
 ## Quick start
 
 ### Deploy
 
+Requires the `genlayer` CLI (`npm install -g genlayer`) with an account
+already created/unlocked (`genlayer account create`, then
+`genlayer account unlock`).
+
 ```bash
-genlayer deploy contracts/ai_escrow.py
-# or
-python scripts/deploy.py --network studionet
+genlayer network set testnet-bradbury
+genlayer deploy --contract contracts/ai_escrow.py
+# or, via the wrapper script:
+python scripts/deploy.py --network testnet-bradbury
 ```
+
+Deployment works entirely locally through the CLI — no Docker and no
+CI pipeline needed for a testnet deploy (Docker is only required if
+you also want to run a local `studionet`/localnet node).
 
 ### Run frontend
 
+Deployed via Vercel (see `vercel.json`):
+
 ```bash
-deno run --allow-net --allow-read main.ts
-# open http://localhost:8000
+vercel --prod
+```
+
+Or preview locally with any static server, e.g.:
+
+```bash
+npx serve frontend
 ```
 
 Update `CONTRACT_ADDRESS` in `frontend/index.html` to your deployed address.
@@ -115,8 +150,9 @@ python -m pytest tests/
 ```
 contracts/ai_escrow.py    ← Intelligent Contract (all logic here)
 frontend/index.html       ← Browser UI, talks to chain via genlayer-js
-main.ts                   ← Static file server only (no business logic)
-scripts/deploy.py         ← Deployment helper
-scripts/interact.py       ← End-to-end demo script
-tests/                    ← Simulation tests
+vercel.json                ← Static deploy config for Vercel
+scripts/deploy.py         ← Deployment helper (wraps the genlayer CLI)
 ```
+ploading README.md…]()
+
+
