@@ -5,3 +5,4 @@ genlayer-test>=0.1.0   # provides the `gltest` command
 pytest>=8.0
 pytest-asyncio>=0.23
 python-dotenv>=1.0.0
+
