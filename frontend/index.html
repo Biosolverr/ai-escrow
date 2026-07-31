@@ -120,6 +120,33 @@ body::after {
 
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
 
+.wallet-btn {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gray0, #000);
+  background: var(--white);
+  border: 1px solid var(--white);
+  padding: 6px 12px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: opacity 0.15s;
+}
+.wallet-btn:hover { opacity: 0.85; }
+.wallet-btn.connected {
+  background: transparent;
+  color: var(--green);
+  border-color: var(--green);
+  cursor: default;
+}
+.wallet-btn.no-metamask {
+  background: transparent;
+  color: var(--red);
+  border-color: var(--red);
+  cursor: pointer;
+}
+
 /* ── SIDEBAR ── */
 .sidebar {
   border-right: 1px solid var(--border);
@@ -633,6 +660,7 @@ body::after {
     <div class="header-right">
       <span class="tag">GenLayer</span>
       <span class="tag live"><span class="dot"></span>Bradbury Testnet</span>
+      <button class="wallet-btn" id="walletBtn" onclick="connectWallet()">Connect Wallet</button>
     </div>
   </header>
 
@@ -1035,8 +1063,6 @@ body::after {
 // ════════════════════════════════════════════════════════════════════════════
 import {
   createClient,
-  createAccount,
-  generatePrivateKey,
 } from 'https://esm.sh/genlayer-js@latest';
 import { studionet, testnetBradbury, localnet } from 'https://esm.sh/genlayer-js@latest/chains';
 
@@ -1048,26 +1074,79 @@ const NETWORK = testnetBradbury; // deployed on GenLayer Bradbury Testnet — ch
 let client = null;
 let account = null;
 
-async function ensureClient() {
-  if (client) return client;
+function shortAddr(a) {
+  const s = String(a);
+  return s.slice(0, 6) + '…' + s.slice(-4);
+}
 
-  if (window.ethereum) {
-    // Use MetaMask account/signer
+function setWalletBtn(state, label) {
+  const btn = document.getElementById('walletBtn');
+  btn.className = 'wallet-btn' + (state ? ' ' + state : '');
+  btn.textContent = label;
+}
+
+async function connectWallet() {
+  if (client) return client; // already connected
+
+  if (!window.ethereum) {
+    setWalletBtn('no-metamask', 'MetaMask not found');
+    alert('MetaMask (or another injected wallet) is required to use this app on Bradbury Testnet. Install it and reload the page.');
+    return null;
+  }
+
+  try {
     const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
     account = accounts[0];
     client = createClient({ chain: NETWORK, account });
-  } else {
-    // Dev fallback: ephemeral local key (no funds on real networks)
-    const pk = generatePrivateKey();
-    account = createAccount(pk);
-    client = createClient({ chain: NETWORK, account });
+    setWalletBtn('connected', shortAddr(account));
+    fetchStats();
+    return client;
+  } catch (e) {
+    setWalletBtn('', 'Connect Wallet');
+    alert('Wallet connection was rejected or failed: ' + (e?.message || e));
+    return null;
   }
-  return client;
 }
 
-// ── READ (view) ────────────────────────────────────────────────────────────────
+async function ensureClient() {
+  if (client) return client;
+  const c = await connectWallet();
+  if (!c) throw new Error('Wallet not connected');
+  return c;
+}
+
+window.connectWallet = connectWallet;
+
+// Keep UI in sync if the user switches account or network inside MetaMask
+if (window.ethereum) {
+  window.ethereum.on?.('accountsChanged', (accounts) => {
+    client = null;
+    if (accounts.length === 0) {
+      account = null;
+      setWalletBtn('', 'Connect Wallet');
+    } else {
+      account = accounts[0];
+      client = createClient({ chain: NETWORK, account });
+      setWalletBtn('connected', shortAddr(account));
+      fetchStats();
+    }
+  });
+  window.ethereum.on?.('chainChanged', () => {
+    // Force reconnect — the injected chain may no longer be Bradbury Testnet
+    client = null;
+    setWalletBtn('', 'Connect Wallet');
+  });
+}
+
+// ── READ (view) — no wallet required, uses a signer-less client ────────────────
+let readClient = null;
+function ensureReadClient() {
+  if (!readClient) readClient = createClient({ chain: NETWORK });
+  return readClient;
+}
+
 async function readContract(method, args = []) {
-  const c = await ensureClient();
+  const c = ensureReadClient();
   return await c.readContract({
     address: CONTRACT_ADDRESS,
     functionName: method,
@@ -1075,7 +1154,7 @@ async function readContract(method, args = []) {
   });
 }
 
-// ── WRITE (transaction, waits for finalization) ─────────────────────────────────
+// ── WRITE (transaction, waits for finalization) — requires connected wallet ─────
 async function writeContract(method, args = [], value = undefined) {
   const c = await ensureClient();
   const txHash = await c.writeContract({
