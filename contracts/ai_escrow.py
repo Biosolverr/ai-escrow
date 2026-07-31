@@ -315,3 +315,4 @@ class AIEscrow(gl.Contract):
     def get_owner(self) -> str:
         return str(self.owner)
 
+
