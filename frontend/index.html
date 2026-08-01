@@ -1163,7 +1163,15 @@ async function writeContract(method, args = [], value = undefined) {
     args,
     value,
   });
-  const receipt = await c.waitForTransactionReceipt({ hash: txHash, status: 'FINALIZED' });
+  // Bradbury Testnet finalization can take well over the SDK default wait
+  // window (leader proposal → validator votes → appeal window → finalize).
+  // retries × interval = up to 5 minutes before we give up waiting.
+  const receipt = await c.waitForTransactionReceipt({
+    hash: txHash,
+    status: 'FINALIZED',
+    retries: 100,
+    interval: 3000,
+  });
   return { hash: txHash, receipt };
 }
 
@@ -1195,6 +1203,51 @@ function log(id, msg, type = 'info') {
 
 // ── helper: turn errors into {error:...} shape used below ────────────────────
 function errObj(e) { return { error: e?.shortMessage || e?.message || String(e) }; }
+
+// ── GLOBAL BUSY LOCK — block every action button while a tx is in flight ────────
+let busy = false;
+function setGlobalBusy(state) {
+  busy = state;
+  document.querySelectorAll('.nav-btn, .btn').forEach(b => {
+    if (state) {
+      if (b.dataset.wasDisabled === undefined) b.dataset.wasDisabled = b.disabled ? '1' : '0';
+      b.disabled = true;
+    } else {
+      b.disabled = b.dataset.wasDisabled === '1';
+      delete b.dataset.wasDisabled;
+    }
+  });
+}
+
+// ── LIVE TICKER — shows elapsed waiting time instead of a hard error/blank gap ──
+function startTicker(logId, label) {
+  const el = document.getElementById(logId);
+  el.classList.add('show');
+  const line = document.createElement('div');
+  line.className = 't-line';
+  const t0 = Date.now();
+  line.innerHTML = `<span class="t-time">--:--:--</span><span class="t-info">${label} · 0s</span>`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  const iv = setInterval(() => {
+    const secs = Math.floor((Date.now() - t0) / 1000);
+    const span = line.querySelector('.t-info');
+    if (span) span.textContent = `${label} · ${secs}s`;
+  }, 1000);
+  return {
+    stop(finalMsg, type = 'ok') {
+      clearInterval(iv);
+      const t = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      line.innerHTML = `<span class="t-time">${t}</span><span class="t-${type}">${finalMsg}</span>`;
+    },
+  };
+}
+
+// If a write tx is still ACCEPTED but hasn't reached FINALIZED within our
+// wait window, that's not a failure — treat it as "still processing".
+function isFinalizeTimeout(e) {
+  return /Timed out waiting for transaction/i.test(e?.message || '');
+}
 
 // ── VERDICT HELPERS ──────────────────────────────────────────────────────────
 const VERDICT_CFG = {
@@ -1237,7 +1290,8 @@ async function doCreate() {
   if (task.length < 20) { log('c_log', 'Task too short (min 20 chars)', 'err'); return; }
   if (parseInt(window_s) < 60) { log('c_log', 'Dispute window min 60 seconds', 'err'); return; }
 
-  log('c_log', 'Sending create_escrow tx...', 'info');
+  setGlobalBusy(true);
+  const ticker = startTicker('c_log', 'Waiting for consensus / finalization');
 
   try {
     const valueWei = BigInt(Math.round(parseFloat(amount) * 1e18));
@@ -1248,7 +1302,7 @@ async function doCreate() {
     );
     const escrowId = receipt.result ?? (Number(await readContract('get_total_escrows')) - 1);
 
-    log('c_log', `Tx: ${txLink(hash)}`, 'info');
+    ticker.stop(`Finalized · Tx: ${txLink(hash)}`, 'ok');
     log('c_log', `Escrow #${escrowId} created · ${amount} GEN locked`, 'ok');
     log('c_log', `Dispute window: ${window_s}s`, 'info');
     const box = document.getElementById('c_result');
@@ -1257,7 +1311,13 @@ async function doCreate() {
     box.classList.add('show');
     fetchStats();
   } catch (e) {
-    log('c_log', `Error: ${errObj(e).error}`, 'err');
+    if (isFinalizeTimeout(e)) {
+      ticker.stop('Still processing on-chain — not an error, just taking longer than usual. Check status/explorer in a bit.', 'warn');
+    } else {
+      ticker.stop(`Error: ${errObj(e).error}`, 'err');
+    }
+  } finally {
+    setGlobalBusy(false);
   }
 }
 
@@ -1267,15 +1327,21 @@ async function doSubmit() {
   const url = document.getElementById('s_url').value.trim();
   if (id === '' || !url) { log('s_log', 'All fields required', 'err'); return; }
 
-  log('s_log', `Submitting deliverable for escrow #${id}...`, 'info');
+  setGlobalBusy(true);
+  const ticker = startTicker('s_log', 'Waiting for consensus / finalization');
 
   try {
     const { hash } = await writeContract('submit_deliverable', [BigInt(id), url]);
-    log('s_log', `Tx: ${txLink(hash)}`, 'info');
-    log('s_log', 'Deliverable submitted · Status → submitted', 'ok');
+    ticker.stop(`Finalized · Deliverable submitted · Tx: ${txLink(hash)}`, 'ok');
     document.getElementById('s_result').classList.add('show');
   } catch (e) {
-    log('s_log', `Error: ${errObj(e).error}`, 'err');
+    if (isFinalizeTimeout(e)) {
+      ticker.stop('Still processing on-chain — not an error, just taking longer than usual. Check status/explorer in a bit.', 'warn');
+    } else {
+      ticker.stop(`Error: ${errObj(e).error}`, 'err');
+    }
+  } finally {
+    setGlobalBusy(false);
   }
 }
 
@@ -1284,32 +1350,35 @@ async function doResolve() {
   const id = document.getElementById('r_id').value;
   if (id === '') { log('r_log', 'Escrow ID required', 'err'); return; }
 
+  setGlobalBusy(true);
   const btn = document.getElementById('r_btn');
-  btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span> Running validators...';
 
   document.getElementById('r_agents').style.display = 'grid';
   document.getElementById('r_verdict').classList.remove('show');
   renderEvaluating('r');
 
-  log('r_log', `resolve_escrow(${id}) · leader + validators fetch deliverable via gl.nondet.web.render() + strict_eq consensus...`, 'info');
+  const ticker = startTicker('r_log', 'Leader + validators fetching deliverable & running strict_eq consensus');
 
   try {
     const { hash } = await writeContract('resolve_escrow', [BigInt(id)]);
-    log('r_log', `Tx: ${txLink(hash)}`, 'info');
     const verdictData = await readContract('get_verdict', [BigInt(id)]);
     const final_verdict = verdictData.final_verdict;
 
     renderEvaluated('r', final_verdict);
-    log('r_log', `Verdict: ${final_verdict?.toUpperCase()} · Funds frozen · Dispute window open`, 'ok');
+    ticker.stop(`Finalized · Verdict: ${final_verdict?.toUpperCase()} · Tx: ${txLink(hash)}`, 'ok');
     renderVerdict('r', final_verdict);
   } catch (e) {
-    log('r_log', `Error: ${errObj(e).error}`, 'err');
     document.getElementById('r_agents').style.display = 'none';
+    if (isFinalizeTimeout(e)) {
+      ticker.stop('Still processing on-chain — not an error, just taking longer than usual. Check status/explorer in a bit.', 'warn');
+    } else {
+      ticker.stop(`Error: ${errObj(e).error}`, 'err');
+    }
   }
 
-  btn.disabled = false;
   btn.innerHTML = 'Run AI Arbitration →';
+  setGlobalBusy(false);
 }
 
 // ── 04 CLAIM ─────────────────────────────────────────────────────────────────
@@ -1317,19 +1386,25 @@ async function doClaim() {
   const id = document.getElementById('cl_id').value;
   if (id === '') { log('cl_log', 'Escrow ID required', 'err'); return; }
 
-  log('cl_log', `claim_payment(${id})...`, 'info');
+  setGlobalBusy(true);
+  const ticker = startTicker('cl_log', 'Waiting for consensus / finalization');
 
   try {
     const { hash, receipt } = await writeContract('claim_payment', [BigInt(id)]);
     const verdict = receipt.result;
-    log('cl_log', `Tx: ${txLink(hash)}`, 'info');
-    log('cl_log', `Payment claimed · Verdict: ${verdict?.toUpperCase()}`, 'ok');
+    ticker.stop(`Finalized · Payment claimed · Verdict: ${verdict?.toUpperCase()} · Tx: ${txLink(hash)}`, 'ok');
     const box = document.getElementById('cl_result');
     document.getElementById('cl_result_verdict').textContent = verdict?.toUpperCase() || 'OK';
     document.getElementById('cl_result_meta').textContent = VERDICT_CFG[verdict]?.payout || '';
     box.classList.add('show');
   } catch (e) {
-    log('cl_log', `Error: ${errObj(e).error}`, 'err');
+    if (isFinalizeTimeout(e)) {
+      ticker.stop('Still processing on-chain — not an error, just taking longer than usual. Check status/explorer in a bit.', 'warn');
+    } else {
+      ticker.stop(`Error: ${errObj(e).error}`, 'err');
+    }
+  } finally {
+    setGlobalBusy(false);
   }
 }
 
@@ -1338,15 +1413,21 @@ async function doDispute() {
   const id = document.getElementById('d_id').value;
   if (id === '') { log('d_log', 'Escrow ID required', 'err'); return; }
 
-  log('d_log', `dispute_escrow(${id})...`, 'warn');
+  setGlobalBusy(true);
+  const ticker = startTicker('d_log', 'Waiting for consensus / finalization');
 
   try {
     const { hash } = await writeContract('dispute_escrow', [BigInt(id)]);
-    log('d_log', `Tx: ${txLink(hash)}`, 'info');
-    log('d_log', 'Dispute opened · Status → disputed · Funds frozen', 'ok');
+    ticker.stop(`Finalized · Dispute opened · Funds frozen · Tx: ${txLink(hash)}`, 'ok');
     document.getElementById('d_result').classList.add('show');
   } catch (e) {
-    log('d_log', `Error: ${errObj(e).error}`, 'err');
+    if (isFinalizeTimeout(e)) {
+      ticker.stop('Still processing on-chain — not an error, just taking longer than usual. Check status/explorer in a bit.', 'warn');
+    } else {
+      ticker.stop(`Error: ${errObj(e).error}`, 'err');
+    }
+  } finally {
+    setGlobalBusy(false);
   }
 }
 
@@ -1355,32 +1436,35 @@ async function doReresolve() {
   const id = document.getElementById('rr_id').value;
   if (id === '') { log('rr_log', 'Escrow ID required', 'err'); return; }
 
+  setGlobalBusy(true);
   const btn = document.getElementById('rr_btn');
-  btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span> Re-arbitrating...';
 
   document.getElementById('rr_agents').style.display = 'grid';
   document.getElementById('rr_verdict').classList.remove('show');
   renderEvaluating('rr');
 
-  log('rr_log', `re_resolve_escrow(${id}) · Final arbitration...`, 'warn');
+  const ticker = startTicker('rr_log', 'Final arbitration — waiting for consensus / finalization');
 
   try {
     const { hash } = await writeContract('re_resolve_escrow', [BigInt(id)]);
-    log('rr_log', `Tx: ${txLink(hash)}`, 'info');
     const verdictData = await readContract('get_verdict', [BigInt(id)]);
     const final_verdict = verdictData.final_verdict;
 
     renderEvaluated('rr', final_verdict);
-    log('rr_log', `Final verdict: ${final_verdict?.toUpperCase()} · Payout executed`, 'ok');
+    ticker.stop(`Finalized · Final verdict: ${final_verdict?.toUpperCase()} · Payout executed · Tx: ${txLink(hash)}`, 'ok');
     renderVerdict('rr', final_verdict);
   } catch (e) {
-    log('rr_log', `Error: ${errObj(e).error}`, 'err');
     document.getElementById('rr_agents').style.display = 'none';
+    if (isFinalizeTimeout(e)) {
+      ticker.stop('Still processing on-chain — not an error, just taking longer than usual. Check status/explorer in a bit.', 'warn');
+    } else {
+      ticker.stop(`Error: ${errObj(e).error}`, 'err');
+    }
   }
 
-  btn.disabled = false;
   btn.innerHTML = 'Run Re-Arbitration →';
+  setGlobalBusy(false);
 }
 
 // ── 07 STATUS ─────────────────────────────────────────────────────────────────
