@@ -12,3 +12,4 @@ Hosted separately via GitHub Pages (not build-integrated with this
 repo) so it stays a plain static fetch target:
 
 Live page:https://biosolverr.github.io/ai-escrow-demo-deliverable/
+https://zksync-os-testnet-genlayer.explorer.zksync.dev/tx/0xc52394e543acf5aa20c7f5c31cd184ab5e96795caf15942d1f40120da38032ee#overview
