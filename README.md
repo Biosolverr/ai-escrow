@@ -98,8 +98,8 @@ No proxy, no backend API, no off-chain reimplementation.
 | | |
 |---|---|
 | Network | GenLayer Bradbury Testnet (chainId 4221) |
-| Contract address | `0xCc6ec0B09D33989671984C736702cCcC4B22d07B` |
-| Deploy tx | `0x6475a1648418a85635034df5869dda0fd959ef70e646385a91fd9eecc44b95d5` |
+| Contract address | `0xcE24FAF723Be9A94e37fb670DdBFd03547C55E04` |
+| Deployment Transaction ID | `0xfb282620916060f8ef4cb21ca1d1d510ab8929130b0b7070092ce24a0b5b1063` |
 | Explorer | https://explorer-bradbury.genlayer.com/ |
 
 ## Quick start
