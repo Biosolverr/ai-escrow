@@ -501,6 +501,7 @@ body::after {
 .status-badge.partial   { border-color: #403010; color: var(--amber); background: #1a1206; }
 .status-badge.rejected  { border-color: #401010; color: var(--red); background: #1a0606; }
 .status-badge.claimed   { border-color: #2a4010; color: var(--green); background: #0d1a06; }
+.status-badge.verification_failed { border-color: #401010; color: var(--red); background: #1a0606; }
 
 .status-card-body {
   display: grid;
@@ -786,8 +787,12 @@ body::after {
           <input type="number" id="s_id" placeholder="0" min="0">
         </div>
         <div class="field">
-          <label>Deliverable URL</label>
-          <input type="text" id="s_url" placeholder="https://github.com/...">
+          <label>Deliverable (IPFS CID)</label>
+          <input type="text" id="s_url" placeholder="ipfs://Qm... or https://ipfs.io/ipfs/Qm...">
+          <div class="hint" style="font-size:12px;opacity:0.7;margin-top:4px;">
+            Must be a content-addressed IPFS link, not a plain mutable URL -- publish your
+            deliverable to IPFS first (e.g. via nft.storage / web3.storage / a local node).
+          </div>
         </div>
       </div>
 
@@ -1045,7 +1050,7 @@ body::after {
             <div class="status-field-val" id="st_resolved">—</div>
           </div>
           <div class="status-field">
-            <div class="status-field-key">Deliverable URL</div>
+            <div class="status-field-key">Deliverable CID</div>
             <div class="status-field-val" id="st_url" style="word-break:break-all">—</div>
           </div>
         </div>
@@ -1484,7 +1489,7 @@ async function doStatus() {
       document.getElementById('st_amount').textContent   = data.amount_wei || '—';
       document.getElementById('st_window').textContent   = (data.dispute_window_seconds || '—') + 's';
       document.getElementById('st_verdict').textContent  = data.final_verdict || '—';
-      document.getElementById('st_url').textContent      = data.deliverable_url || '—';
+      document.getElementById('st_url').textContent      = data.deliverable_cid || '—';
 
       const ts = data.resolved_at;
       document.getElementById('st_resolved').textContent = ts && ts > 0
@@ -1538,3 +1543,4 @@ fetchStats();
 </script>
 </body>
 </html>
+
