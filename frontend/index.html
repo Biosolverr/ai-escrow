@@ -501,6 +501,7 @@ body::after {
 .status-badge.partial   { border-color: #403010; color: var(--amber); background: #1a1206; }
 .status-badge.rejected  { border-color: #401010; color: var(--red); background: #1a0606; }
 .status-badge.claimed   { border-color: #2a4010; color: var(--green); background: #0d1a06; }
+.status-badge.expired   { border-color: #403010; color: var(--amber); background: #1a1206; }
 .status-badge.verification_failed { border-color: #401010; color: var(--red); background: #1a0606; }
 
 .status-card-body {
@@ -633,6 +634,27 @@ body::after {
 .info-key { font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gray4); margin-bottom: 4px; }
 .info-val { font-size: 12px; color: var(--gray6); font-family: var(--mono); }
 
+/* ── GATEWAY LIST ── */
+.gw-list {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 20px;
+  display: none;
+}
+.gw-list.show { display: block; }
+.gw-row {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--gray6);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gw-row:last-child { border-bottom: none; }
+.gw-idx { color: var(--gray4); font-family: var(--display); font-size: 11px; width: 20px; }
+
 /* ── SCROLLBAR ── */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: var(--black); }
@@ -700,10 +722,26 @@ body::after {
     </div>
 
     <div class="sidebar-section">
+      <div class="sidebar-label">Safety</div>
+      <button class="nav-btn" onclick="nav('reclaim',this)">
+        <span class="n-icon">↩</span> Reclaim Expired
+        <span class="n-num">07</span>
+      </button>
+    </div>
+
+    <div class="sidebar-section">
       <div class="sidebar-label">Info</div>
       <button class="nav-btn" onclick="nav('status',this)">
         <span class="n-icon">◈</span> Check Status
-        <span class="n-num">07</span>
+        <span class="n-num">08</span>
+      </button>
+      <button class="nav-btn" onclick="nav('gateways',this)">
+        <span class="n-icon">⛭</span> IPFS Gateways
+        <span class="n-num">09</span>
+      </button>
+      <button class="nav-btn" onclick="nav('verdict',this)">
+        <span class="n-icon">§</span> Get Verdict
+        <span class="n-num">10</span>
       </button>
     </div>
 
@@ -732,7 +770,7 @@ body::after {
       <div class="panel-head">
         <div>
           <div class="panel-title">Create Escrow</div>
-          <div class="panel-sub">Lock funds · Define task · Set dispute window</div>
+          <div class="panel-sub">Lock funds · Define task · Set dispute window &amp; submission deadline</div>
         </div>
         <div class="panel-num">01</div>
       </div>
@@ -755,6 +793,11 @@ body::after {
           <label>Amount (GEN)</label>
           <input type="number" id="c_amount" placeholder="1.0" min="0.001" step="0.001">
           <span class="field-hint">Deposited into escrow contract</span>
+        </div>
+        <div class="field">
+          <label>Submission Deadline (seconds)</label>
+          <input type="number" id="c_deadline" placeholder="86400" min="60">
+          <span class="field-hint">Min 60s · from creation · client can reclaim_expired() a full refund if the freelancer never reaches a real verdict in time</span>
         </div>
       </div>
 
@@ -998,14 +1041,60 @@ body::after {
       <div class="terminal" id="rr_log"></div>
     </div>
 
-    <!-- 07 STATUS -->
+    <!-- 07 RECLAIM EXPIRED -->
+    <div id="panel-reclaim" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Reclaim Expired</div>
+          <div class="panel-sub">Full refund to client if the freelancer never reached a real verdict in time · No platform fee taken</div>
+        </div>
+        <div class="panel-num">07</div>
+      </div>
+
+      <div class="info-row">
+        <div class="info-cell">
+          <div class="info-key">Required status</div>
+          <div class="info-val">pending or verification_failed</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Who can call</div>
+          <div class="info-val">Client only</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">When</div>
+          <div class="info-val">After created_at + submission_deadline_seconds</div>
+        </div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="rc_id" placeholder="0" min="0">
+          <span class="field-hint">Switch wallet to the client before calling</span>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-danger" onclick="doReclaim()">Reclaim Expired →</button>
+      </div>
+
+      <div class="result-box" id="rc_result">
+        <div class="result-label">Refund Claimed</div>
+        <div class="result-id warn">EXPIRED</div>
+        <div class="result-meta">Full amount returned to client · No platform fee</div>
+      </div>
+
+      <div class="terminal" id="rc_log"></div>
+    </div>
+
+    <!-- 08 STATUS -->
     <div id="panel-status" class="panel">
       <div class="panel-head">
         <div>
           <div class="panel-title">Check Status</div>
           <div class="panel-sub">Read escrow state from contract</div>
         </div>
-        <div class="panel-num">07</div>
+        <div class="panel-num">08</div>
       </div>
 
       <div class="form-grid cols-1">
@@ -1050,6 +1139,10 @@ body::after {
             <div class="status-field-val" id="st_resolved">—</div>
           </div>
           <div class="status-field">
+            <div class="status-field-key">Submission Deadline</div>
+            <div class="status-field-val" id="st_deadline">—</div>
+          </div>
+          <div class="status-field">
             <div class="status-field-key">Deliverable CID</div>
             <div class="status-field-val" id="st_url" style="word-break:break-all">—</div>
           </div>
@@ -1057,6 +1150,64 @@ body::after {
       </div>
 
       <div class="terminal" id="st_log"></div>
+    </div>
+
+    <!-- 09 GATEWAYS -->
+    <div id="panel-gateways" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">IPFS Gateways</div>
+          <div class="panel-sub">Fixed, non-owner-configurable gateway list every fetch tries, in order</div>
+        </div>
+        <div class="panel-num">09</div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="doGateways()">Fetch Gateways</button>
+      </div>
+
+      <div class="gw-list" id="gw_list"></div>
+
+      <div class="terminal" id="gw_log"></div>
+    </div>
+
+    <!-- 10 GET VERDICT -->
+    <div id="panel-verdict" class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">Get Verdict</div>
+          <div class="panel-sub">Read final_verdict, status &amp; resolved_at for an escrow, standalone</div>
+        </div>
+        <div class="panel-num">10</div>
+      </div>
+
+      <div class="form-grid cols-1">
+        <div class="field">
+          <label>Escrow ID</label>
+          <input type="number" id="v_id" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="doVerdict()">Fetch Verdict</button>
+      </div>
+
+      <div class="info-row" id="v_result" style="display:none">
+        <div class="info-cell">
+          <div class="info-key">Final Verdict</div>
+          <div class="info-val" id="v_final">—</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Status</div>
+          <div class="info-val" id="v_status">—</div>
+        </div>
+        <div class="info-cell">
+          <div class="info-key">Resolved At</div>
+          <div class="info-val" id="v_resolved">—</div>
+        </div>
+      </div>
+
+      <div class="terminal" id="v_log"></div>
     </div>
 
   </main>
@@ -1288,12 +1439,14 @@ async function doCreate() {
   const window_s   = document.getElementById('c_window').value;
   const task       = document.getElementById('c_task').value.trim();
   const amount     = document.getElementById('c_amount').value;
+  const deadline_s = document.getElementById('c_deadline').value;
 
-  if (!freelancer || !window_s || !task || !amount) {
+  if (!freelancer || !window_s || !task || !amount || !deadline_s) {
     log('c_log', 'All fields required', 'err'); return;
   }
   if (task.length < 20) { log('c_log', 'Task too short (min 20 chars)', 'err'); return; }
   if (parseInt(window_s) < 60) { log('c_log', 'Dispute window min 60 seconds', 'err'); return; }
+  if (parseInt(deadline_s) < 60) { log('c_log', 'Submission deadline min 60 seconds', 'err'); return; }
 
   setGlobalBusy(true);
   const ticker = startTicker('c_log', 'Waiting for consensus / finalization');
@@ -1302,17 +1455,17 @@ async function doCreate() {
     const valueWei = BigInt(Math.round(parseFloat(amount) * 1e18));
     const { hash, receipt } = await writeContract(
       'create_escrow',
-      [freelancer, task, BigInt(window_s)],
+      [freelancer, task, BigInt(window_s), BigInt(deadline_s)],
       valueWei
     );
     const escrowId = receipt.result ?? (Number(await readContract('get_total_escrows')) - 1);
 
     ticker.stop(`Finalized · Tx: ${txLink(hash)}`, 'ok');
     log('c_log', `Escrow #${escrowId} created · ${amount} GEN locked`, 'ok');
-    log('c_log', `Dispute window: ${window_s}s`, 'info');
+    log('c_log', `Dispute window: ${window_s}s · Submission deadline: ${deadline_s}s`, 'info');
     const box = document.getElementById('c_result');
     document.getElementById('c_result_id').textContent = '#' + escrowId;
-    document.getElementById('c_result_meta').textContent = `${amount} GEN · Window: ${window_s}s · ${freelancer.slice(0,14)}...`;
+    document.getElementById('c_result_meta').textContent = `${amount} GEN · Window: ${window_s}s · Deadline: ${deadline_s}s · ${freelancer.slice(0,14)}...`;
     box.classList.add('show');
     fetchStats();
   } catch (e) {
@@ -1472,7 +1625,30 @@ async function doReresolve() {
   setGlobalBusy(false);
 }
 
-// ── 07 STATUS ─────────────────────────────────────────────────────────────────
+// ── 07 RECLAIM EXPIRED ────────────────────────────────────────────────────────
+async function doReclaim() {
+  const id = document.getElementById('rc_id').value;
+  if (id === '') { log('rc_log', 'Escrow ID required', 'err'); return; }
+
+  setGlobalBusy(true);
+  const ticker = startTicker('rc_log', 'Waiting for consensus / finalization');
+
+  try {
+    const { hash } = await writeContract('reclaim_expired', [BigInt(id)]);
+    ticker.stop(`Finalized · Full refund returned to client · Tx: ${txLink(hash)}`, 'ok');
+    document.getElementById('rc_result').classList.add('show');
+  } catch (e) {
+    if (isFinalizeTimeout(e)) {
+      ticker.stop('Still processing on-chain — not an error, just taking longer than usual. Check status/explorer in a bit.', 'warn');
+    } else {
+      ticker.stop(`Error: ${errObj(e).error}`, 'err');
+    }
+  } finally {
+    setGlobalBusy(false);
+  }
+}
+
+// ── 08 STATUS ─────────────────────────────────────────────────────────────────
 async function doStatus() {
   const id = document.getElementById('st_id').value;
   if (id === '') return;
@@ -1496,6 +1672,11 @@ async function doStatus() {
         ? new Date(Number(ts) * 1000).toLocaleString()
         : '—';
 
+      const dl = data.submission_deadline_at;
+      document.getElementById('st_deadline').textContent = dl && dl > 0
+        ? new Date(Number(dl) * 1000).toLocaleString()
+        : '—';
+
       const badge = document.getElementById('st_badge');
       badge.textContent = (data.status || '—').toUpperCase();
       badge.className = `status-badge ${data.status || ''}`;
@@ -1507,6 +1688,47 @@ async function doStatus() {
     }
   } catch(e) {
     log('st_log', `Error: ${errObj(e).error}`, 'err');
+  }
+}
+
+// ── 09 GATEWAYS ───────────────────────────────────────────────────────────────
+async function doGateways() {
+  log('gw_log', 'get_ipfs_gateways()...', 'info');
+  try {
+    const gateways = await readContract('get_ipfs_gateways');
+    const list = document.getElementById('gw_list');
+    list.innerHTML = '';
+    (gateways || []).forEach((g, i) => {
+      const row = document.createElement('div');
+      row.className = 'gw-row';
+      row.innerHTML = `<span class="gw-idx">${String(i + 1).padStart(2,'0')}</span><span>${g}</span>`;
+      list.appendChild(row);
+    });
+    list.classList.add('show');
+    log('gw_log', `${(gateways || []).length} gateways · fixed, not owner-configurable`, 'ok');
+  } catch (e) {
+    log('gw_log', `Error: ${errObj(e).error}`, 'err');
+  }
+}
+
+// ── 10 GET VERDICT ────────────────────────────────────────────────────────────
+async function doVerdict() {
+  const id = document.getElementById('v_id').value;
+  if (id === '') { log('v_log', 'Escrow ID required', 'err'); return; }
+
+  log('v_log', `get_verdict(${id})...`, 'info');
+  try {
+    const data = await readContract('get_verdict', [BigInt(id)]);
+    document.getElementById('v_final').textContent = data.final_verdict || '—';
+    document.getElementById('v_status').textContent = (data.status || '—').toUpperCase();
+    const ts = data.resolved_at;
+    document.getElementById('v_resolved').textContent = ts && ts > 0
+      ? new Date(Number(ts) * 1000).toLocaleString()
+      : '—';
+    document.getElementById('v_result').style.display = 'flex';
+    log('v_log', `Status: ${(data.status || '—').toUpperCase()}`, 'ok');
+  } catch (e) {
+    log('v_log', `Error: ${errObj(e).error}`, 'err');
   }
 }
 
@@ -1537,10 +1759,12 @@ window.doResolve = doResolve;
 window.doClaim = doClaim;
 window.doDispute = doDispute;
 window.doReresolve = doReresolve;
+window.doReclaim = doReclaim;
 window.doStatus = doStatus;
+window.doGateways = doGateways;
+window.doVerdict = doVerdict;
 
 fetchStats();
 </script>
 </body>
 </html>
-
