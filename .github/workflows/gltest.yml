@@ -1,0 +1,44 @@
+name: Adversarial gltest suite
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  gltest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install GenLayer CLI
+        run: npm install -g genlayer
+
+      - name: Install Python test deps
+        run: pip install genlayer-test pytest
+
+      - name: Initialize local GenLayer environment (headless, Docker-backed)
+        run: genlayer init --headless
+
+      - name: Start GenLayer Studio node
+        run: genlayer up &
+        # backgrounded so the workflow can continue to the next step
+
+      - name: Wait for node readiness
+        run: |
+          for i in {1..30}; do
+            curl -sf http://localhost:8000 && break
+            echo "Waiting for GenLayer node..."
+            sleep 5
+          done
+
+      - name: Run adversarial gltest suite
+        run: gltest test tests/test_arbitration_gltest.py -v
+
+      - name: Stop environment
+        if: always()
+        run: genlayer stop
