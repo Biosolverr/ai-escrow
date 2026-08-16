@@ -16,10 +16,21 @@
 #      explicit delimiter with instructions to treat it as data, not
 #      commands, to blunt prompt-injection attempts.
 #   C. Any failure (content unreachable, hash mismatch, unparseable /
-#      out-of-enum model output) is mapped to a single canonical
-#      VERIFICATION_FAILED outcome -- it is compared for exact equality
-#      like any other verdict by strict_eq, so consensus stays
+#      out-of-enum model output, LLM provider error) is mapped to a single
+#      canonical VERIFICATION_FAILED outcome -- it is compared for exact
+#      equality like any other verdict by strict_eq, so consensus stays
 #      deterministic, and it NEVER triggers a payout.
+#   D. Client-side economic safety: reclaim_expired() gives the client a
+#      full refund if the freelancer never reaches a real verdict
+#      (PENDING or stuck in VERIFICATION_FAILED) within
+#      submission_deadline_seconds of creation. Without this, funds could
+#      be orphaned forever if a freelancer simply never delivers.
+#   E. The IPFS gateway list (GATEWAYS) is a fixed constant, not
+#      owner-configurable. An earlier revision had an owner-only
+#      set_ipfs_gateway() escape hatch; a security pass found that this
+#      let a single compromised owner key redirect every future fetch to
+#      an attacker-controlled server and completely defeat fix A (see
+#      docs/SECURITY_REVIEW.md) -- removed rather than mitigated.
 #
 # Known limitation: this contract does not cryptographically decode the
 # IPFS multihash to prove the fetched bytes match the CID -- that would
@@ -48,6 +59,8 @@ class EscrowStatus(Enum):
     PARTIAL = "partial"         # final: funds split
     REJECTED = "rejected"       # final: client gets refund
     CLAIMED = "claimed"         # claim_payment called after window expired
+    EXPIRED = "expired"         # freelancer never delivered a verifiable submission
+                                 # in time -- client reclaimed a full refund
 
 
 # Sentinel outcome shared by the pinning step and the arbitration step.
@@ -63,6 +76,27 @@ FETCH_FAILED = "FETCH_FAILED"  # internal-only sentinel used while pinning at su
 VALID_VERDICTS = ("approved", "partial", "rejected")
 DEFAULT_IPFS_GATEWAY = "https://ipfs.io/ipfs/"
 DELIVERABLE_EXCERPT_LEN = 4000  # same slice is hashed AND fed to the LLM -- no TOCTOU gap
+
+# Fixed, immutable list of well-known public IPFS gateways -- NOT
+# owner-configurable. An earlier revision added an owner-only
+# set_ipfs_gateway() escape hatch for operational flexibility, but a
+# deeper security pass found that this let a single compromised/malicious
+# owner key redirect EVERY future fetch to a server that answers any CID
+# with fabricated content -- since this contract does not cryptographically
+# verify the CID's multihash against the fetched bytes (see module
+# docstring), an attacker-controlled gateway completely defeats the
+# content-pinning fix. Removing owner control here is a deliberate
+# trade-off: less operational flexibility if every gateway in this list
+# goes down, in exchange for removing a single-key attack on the whole
+# integrity model.
+GATEWAYS = (
+    "https://ipfs.io/ipfs/",
+    "https://dweb.link/ipfs/",
+    "https://w3s.link/ipfs/",
+    "https://nftstorage.link/ipfs/",
+    "https://cloudflare-ipfs.com/ipfs/",
+    "https://gateway.pinata.cloud/ipfs/",
+)
 
 
 def _tx_timestamp() -> u256:
@@ -89,12 +123,16 @@ def _tx_timestamp() -> u256:
 # ---------------------------------------------------------------------------
 
 def _extract_cid(deliverable_ref: str) -> str:
-    """Accepts 'ipfs://<cid>' or '<any-gateway>/ipfs/<cid>[/path][?query]'
+    """Accepts any of:
+      - a bare CID, exactly as most pinning services (Pinata, web3.storage,
+        ...) display it for you to copy, e.g. 'bafkrei...' or 'Qm...'
+      - 'ipfs://<cid>'
+      - '<any-gateway>/ipfs/<cid>[/path][?query]'
     and returns the bare CID. Rejects anything that doesn't look like a
     content-addressed identifier -- plain mutable HTTP(S) links without an
-    ipfs:// scheme or /ipfs/ path segment are refused outright, which is
-    what closes off the original "freelancer swaps the hosted file after
-    submission" attack.
+    ipfs:// scheme, an /ipfs/ path segment, or a CID-shaped bare string are
+    refused outright, which is what closes off the original "freelancer
+    swaps the hosted file after submission" attack.
 
     This is a superficial format check (length + charset + known CID
     version prefixes), not a cryptographic verification of the CID's
@@ -106,7 +144,7 @@ def _extract_cid(deliverable_ref: str) -> str:
     elif "/ipfs/" in s:
         cid = s.split("/ipfs/", 1)[1]
     else:
-        cid = ""
+        cid = s  # accept a bare CID pasted with no scheme/path at all
     cid = cid.split("/")[0].split("?")[0].split("#")[0].strip()
 
     is_v0 = len(cid) == 46 and cid.startswith("Qm") and cid.isalnum()
@@ -150,6 +188,30 @@ def _canonicalize_verdict(raw: typing.Any) -> str:
     if verdict in VALID_VERDICTS:
         return verdict
     return VERIFICATION_FAILED
+
+
+def _fetch_via_any_gateway(gateways: list, cid: str) -> str:
+    """Tries each gateway URL in the given (already-resolved) list, in
+    order. Any exception or empty response from a given gateway (HTTP
+    error, content-type block, timeout, deprecated-gateway 410, ...) just
+    moves on to the next one. Returns "" only if every gateway failed --
+    callers treat that as a genuine retrieval failure and fail closed.
+
+    Deliberately takes plain data (list[str], str) rather than being a
+    method that reads self.* -- this function is called from inside
+    gl.eq_principle.strict_eq() closures, and GenVM does not support
+    reading contract storage (which `self` carries) from nondet mode.
+    Resolve the gateway list from self.ipfs_gateway BEFORE entering the
+    closure, then pass it in as a plain list, like here."""
+    for gateway in gateways:
+        url = gateway + cid
+        try:
+            content = gl.nondet.web.render(url, mode="text")
+        except Exception:
+            continue
+        if content:
+            return content
+    return ""
 
 
 def _hash_excerpt(content: str) -> str:
@@ -204,6 +266,8 @@ class EscrowRecord:
     created_at: u256
     resolved_at: u256
     dispute_window_seconds: u256   # configurable dispute window
+    submission_deadline_seconds: u256  # from created_at -- client can reclaim if
+                                        # no resolved verdict is reached by then
 
 
 class AIEscrow(gl.Contract):
@@ -224,13 +288,11 @@ class AIEscrow(gl.Contract):
     escrow_counter: u256
     platform_fee_bps: u256
     owner: Address
-    ipfs_gateway: str
 
     def __init__(self):
         self.escrow_counter = u256(0)
         self.platform_fee_bps = u256(100)  # 1 %
         self.owner = gl.message.sender_address
-        self.ipfs_gateway = DEFAULT_IPFS_GATEWAY
 
     # -- internal payout --------------------------------------------------------
 
@@ -246,14 +308,15 @@ class AIEscrow(gl.Contract):
 
     # -- IPFS content pinning -----------------------------------------------------
 
-    def _pin_content_hash(self, fetch_url: str) -> str:
+    def _pin_content_hash(self, cid: str) -> str:
         """Consensus-pinned sha256 of the exact excerpt that will later be
         fed to the arbitration LLM. Returns FETCH_FAILED instead of raising
-        if the content can't be retrieved -- every validator returns the
-        same sentinel, keeping strict_eq deterministic."""
+        if the content can't be retrieved from ANY gateway in the fixed
+        GATEWAYS list -- every validator returns the same sentinel, keeping
+        strict_eq deterministic."""
 
         def attempt() -> str:
-            content = gl.nondet.web.render(fetch_url, mode="text")
+            content = _fetch_via_any_gateway(GATEWAYS, cid)
             if not content:
                 return FETCH_FAILED
             return _hash_excerpt(content)
@@ -269,7 +332,6 @@ class AIEscrow(gl.Contract):
         expected_hash: str,
         is_dispute: bool,
     ) -> str:
-        fetch_url = self.ipfs_gateway + deliverable_cid
         dispute_note = (
             "This is a DISPUTED case -- evaluate especially carefully.\n\n"
             if is_dispute
@@ -277,8 +339,9 @@ class AIEscrow(gl.Contract):
         )
 
         def get_verdict() -> str:
-            # -- Re-fetch the pinned artifact and verify it hasn't drifted --
-            content = gl.nondet.web.render(fetch_url, mode="text")
+            # -- Re-fetch the pinned artifact (trying all known gateways)
+            #    and verify it hasn't drifted --
+            content = _fetch_via_any_gateway(GATEWAYS, deliverable_cid)
             if not content:
                 return VERIFICATION_FAILED
 
@@ -312,7 +375,14 @@ class AIEscrow(gl.Contract):
                 "- rejected: deliverable clearly does not meet requirements\n"
                 "No other keys, no extra text, no markdown fences, no explanation."
             )
-            raw = gl.nondet.exec_prompt(prompt, response_format="json")
+            raw = None
+            try:
+                raw = gl.nondet.exec_prompt(prompt, response_format="json")
+            except Exception:
+                # LLM provider unreachable/erroring -- fail closed exactly
+                # like an unreachable IPFS gateway, rather than letting the
+                # exception propagate uncaught out of this closure.
+                return VERIFICATION_FAILED
             return _canonicalize_verdict(raw)
 
         # Leader runs get_verdict() once; every validator independently
@@ -329,10 +399,12 @@ class AIEscrow(gl.Contract):
         freelancer: str,
         task_description: str,
         dispute_window_seconds: u256,
+        submission_deadline_seconds: u256,
     ) -> u256:
         assert gl.message.value > u256(0), "Must deposit funds"
         assert 20 <= len(task_description) <= 2000, "Invalid task description length"
         assert dispute_window_seconds >= u256(60), "Dispute window must be at least 60 seconds"
+        assert submission_deadline_seconds >= u256(60), "Submission deadline must be at least 60 seconds"
         freelancer_addr = Address(freelancer)
         assert freelancer_addr != gl.message.sender_address, "Client and freelancer must differ"
 
@@ -352,6 +424,7 @@ class AIEscrow(gl.Contract):
             _tx_timestamp(),   # <- deterministic consensus timestamp
             u256(0),
             dispute_window_seconds,
+            submission_deadline_seconds,
         )
         self.escrows[escrow_id] = record
         return escrow_id
@@ -371,13 +444,12 @@ class AIEscrow(gl.Contract):
         assert len(deliverable_ref) > 0, "Deliverable reference required"
 
         cid = _extract_cid(deliverable_ref)
-        fetch_url = self.ipfs_gateway + cid
 
-        content_hash = self._pin_content_hash(fetch_url)
+        content_hash = self._pin_content_hash(cid)
         assert content_hash != FETCH_FAILED, (
-            "Could not retrieve content from IPFS at submission time -- "
-            "publish the deliverable to IPFS, ensure it is reachable via the "
-            "configured gateway, and retry"
+            "Could not retrieve content from IPFS via any known gateway at "
+            "submission time -- confirm the deliverable is actually pinned/"
+            "propagated on IPFS and retry"
         )
 
         record.deliverable_cid = cid
@@ -493,21 +565,39 @@ class AIEscrow(gl.Contract):
         self._payout(record, verdict)
         return verdict
 
-    # -- owner administration --------------------------------------------------------
-
     @gl.public.write
-    def set_ipfs_gateway(self, gateway_url: str) -> None:
-        """Owner-only escape hatch in case the default public gateway
-        becomes unreachable/rate-limited. Must end in '/' since CIDs are
-        appended directly. Only affects escrows submitted AFTER the change
-        -- already-pinned escrows keep resolving against whatever gateway
-        was configured when their content_hash was captured, since that is
-        what the leader and validators will independently reconstruct."""
-        assert gl.message.sender_address == self.owner, "Only owner"
-        assert gateway_url.endswith("/"), "gateway_url must end with '/'"
-        self.ipfs_gateway = gateway_url
+    def reclaim_expired(self, escrow_id: u256) -> None:
+        """Full refund to the client if the freelancer never reached a
+        resolvable state within submission_deadline_seconds of creation.
 
-    # -- view methods --------------------------------------------------------------
+        Covers two ways funds could otherwise be orphaned forever: the
+        freelancer never calling submit_deliverable at all (stuck in
+        PENDING), or repeatedly submitting content that fails verification
+        (stuck cycling through VERIFICATION_FAILED). Once arbitration has
+        actually produced a real verdict (RESOLVED/DISPUTED/final states),
+        this method no longer applies -- that money is already on its
+        proper path via claim_payment / re_resolve_escrow.
+
+        No platform fee is taken on a reclaim: no work was ever verified,
+        so there is nothing to charge a fee against."""
+        record = self.escrows[escrow_id]
+        assert gl.message.sender_address == record.client, "Only client can reclaim"
+        assert record.status in (
+            EscrowStatus.PENDING.value,
+            EscrowStatus.VERIFICATION_FAILED.value,
+        ), "Escrow already has a real verdict in progress -- cannot reclaim"
+
+        now = _tx_timestamp()   # <- deterministic consensus timestamp
+        deadline = record.created_at + record.submission_deadline_seconds
+        assert now > deadline, "Submission deadline has not passed yet"
+
+        record.status = EscrowStatus.EXPIRED.value
+        self.escrows[escrow_id] = record
+
+        if record.amount_wei > u256(0):
+            gl.get_contract_at(record.client).emit(value=record.amount_wei).__receive__()
+
+    # -- view methods --------------------------------------------------------
 
     @gl.public.view
     def get_escrow(self, escrow_id: u256) -> typing.Any:
@@ -524,6 +614,8 @@ class AIEscrow(gl.Contract):
             "created_at": int(record.created_at),
             "resolved_at": int(record.resolved_at),
             "dispute_window_seconds": int(record.dispute_window_seconds),
+            "submission_deadline_seconds": int(record.submission_deadline_seconds),
+            "submission_deadline_at": int(record.created_at + record.submission_deadline_seconds),
         }
 
     @gl.public.view
@@ -548,5 +640,8 @@ class AIEscrow(gl.Contract):
         return str(self.owner)
 
     @gl.public.view
-    def get_ipfs_gateway(self) -> str:
-        return self.ipfs_gateway
+    def get_ipfs_gateways(self) -> typing.Any:
+        """Fixed, non-configurable list of gateways every fetch tries, in
+        order. Exposed purely for transparency/debugging -- there is no
+        owner setter for this (see module docstring for why)."""
+        return list(GATEWAYS)
