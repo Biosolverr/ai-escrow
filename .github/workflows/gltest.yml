@@ -22,11 +22,10 @@ jobs:
         run: pip install genlayer-test pytest
 
       - name: Initialize local GenLayer environment (headless, Docker-backed)
-        run: genlayer init --headless
+        run: yes | genlayer init --headless
 
       - name: Start GenLayer Studio node
-        run: genlayer up &
-        # backgrounded so the workflow can continue to the next step
+        run: yes | genlayer up &
 
       - name: Wait for node readiness
         run: |
@@ -41,4 +40,4 @@ jobs:
 
       - name: Stop environment
         if: always()
-        run: genlayer stop
+        run: yes | genlayer stop
